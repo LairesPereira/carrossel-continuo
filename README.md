@@ -13,7 +13,8 @@ Roda inteiro no navegador: sem login, sem banco de dados, as fotos nunca saem do
 - Botão para sortear mais uma foto como página inteira.
 - Cadeado por página: páginas travadas não mudam ao reembaralhar; as fotos que já estavam nelas ficam protegidas, mas outras fotos podem entrar por cima ou por baixo.
 - Efeitos por foto: granulação, desfoque, desfoque de movimento com direção, preto e branco com intensidade.
-- Seleção de várias fotos para excluir ou aplicar efeitos de uma vez (com Desfazer).
+- Seleção de várias fotos (toque ou retângulo arrastando o mouse) para mover, redimensionar juntas na mesma proporção, girar, excluir ou aplicar efeitos (com Desfazer).
+- Botão de lixeira em cada página para excluir todas as fotos dela; se a página ficar vazia, ela é removida.
 - Exporta cada página em JPG na resolução final (no celular, abre o compartilhamento para salvar na galeria; no computador, baixa um .zip).
 
 ## Rodar localmente

@@ -202,6 +202,8 @@ canvas#strip.grab{touch-action:none}
       <span class="selbar">
         <button id="fillBtn">Preencher página</button>
         <button id="panBtn" aria-pressed="false">Enquadrar</button>
+        <button id="rotL" aria-label="Girar 90° para a esquerda">Girar ↺</button>
+        <button id="rotR" aria-label="Girar 90° para a direita">Girar ↻</button>
         <span class="zoom" id="zoomBox" hidden>
           <button id="zOut" aria-label="Diminuir zoom">−</button>
           <span class="num" id="zNum">1,0×</span>
@@ -218,6 +220,7 @@ canvas#strip.grab{touch-action:none}
       <span class="selbar">
         <span class="num" id="multiCount">0 selecionadas</span>
         <button id="multiAll">Selecionar todas</button>
+        <button id="multiRot">Girar ↻</button>
         <button id="multiDel">Excluir</button>
         <button id="multiDone">Concluir</button>
       </span>
@@ -619,14 +622,14 @@ function updateMeta(){
     :"Toque numa foto para selecionar. Use o cadeado da página para mantê-la ao reembaralhar.";
   $("exportBtn").disabled=!n;$("shuffle").disabled=!n;
   $("multiBtn").setAttribute("aria-pressed",state.multi);$("multibar").hidden=!state.multi;
-  if(state.multi){$("selbar").hidden=true;$("multiCount").textContent=`${state.msel.size} selecionada${state.msel.size!==1?"s":""}`;$("multiDel").disabled=!state.msel.size;
+  if(state.multi){$("selbar").hidden=true;$("multiCount").textContent=`${state.msel.size} selecionada${state.msel.size!==1?"s":""}`;$("multiDel").disabled=!state.msel.size;$("multiRot").disabled=!state.msel.size;
     $("hintText").innerHTML="Toque nas fotos para <b>marcar ou desmarcar</b>. Depois exclua ou aplique efeitos em todas de uma vez."}
   syncFx();
 }
 function refresh(){computeLayout();rulerKey="";drawPreview()}
 function snapshot(){
   undo.push(JSON.stringify({items:layout.items,P:layout.P,order:state.photos.map(p=>p.id),
-    ph:state.photos.map(p=>[p.id,false,p.crop||null,p.fx||null]),locks:[...state.locks],lm:[...state.lockMembers].map(([k,v])=>[k,[...v]])}));
+    ph:state.photos.map(p=>[p.id,false,p.crop||null,p.fx||null,p.rot||0]),locks:[...state.locks],lm:[...state.lockMembers].map(([k,v])=>[k,[...v]])}));
   if(undo.length>40)undo.shift();
 }
 function markEdited(){state.edited=true}
@@ -849,7 +852,7 @@ $("multiDel").onclick=()=>removePhotos([...state.msel]);
 $("cancelSel").onclick=()=>{state.sel=null;state.swap=false;state.pan=false;drawPreview()};
 $("undoBtn").onclick=()=>{const s=undo.pop();if(!s)return;const d=JSON.parse(s);
   const keep=new Map([...trash,...state.photos.map(p=>[p.id,p])]);
-  d.ph.forEach(([id,full,crop,fx])=>{const p=keep.get(id);if(p){p.crop=crop;p.fx=fx||undefined}});
+  d.ph.forEach(([id,full,crop,fx,rot])=>{const p=keep.get(id);if(p){if((p.rot||0)!==(rot||0))setRot(p,rot||0);p.crop=crop;p.fx=fx||undefined}});
   d.order.forEach(id=>trash.delete(id));
   if(!layout)layout={...prm(),P:d.P,items:[],S:0};
   layout.items=d.items.filter(i=>keep.has(i.pid));layout.P=d.P;state.photos=d.order.filter(id=>keep.has(id)).map(id=>keep.get(id));
@@ -861,6 +864,7 @@ addEventListener("keydown",e=>{
   if(state.multi){if((e.key==="Delete"||e.key==="Backspace")&&state.msel.size){e.preventDefault();removePhotos([...state.msel])}else if(e.key==="Escape")$("multiDone").click();return}
   if(!state.sel)return;
   if(e.key==="Escape"){$("cancelSel").click();return}
+  if(e.key==="r"||e.key==="R"){e.preventDefault();rotateSel(e.shiftKey?-1:1);return}
   if(e.key==="Delete"||e.key==="Backspace"){e.preventDefault();$("removeSel").click();return}
   const it=selItem(),st=e.shiftKey?20:4,m={ArrowLeft:[-st,0],ArrowRight:[st,0],ArrowUp:[0,-st],ArrowDown:[0,st]}[e.key];
   if(!it||!m)return;e.preventDefault();if(!e.repeat)snapshot();markEdited();
@@ -875,6 +879,28 @@ addEventListener("dragleave",()=>{if(--dragN<=0){dragN=0;$("drop").hidden=true}}
 addEventListener("dragover",e=>e.preventDefault());
 addEventListener("drop",e=>{e.preventDefault();dragN=0;$("drop").hidden=true;if(e.dataTransfer?.files?.length)addFiles(e.dataTransfer.files)});
 let rt;addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{rulerKey="";drawPreview()},120)});
+
+/* ---------- girar 90° ---------- */
+function rotCanvas(src,rot){
+  const sw=src.naturalWidth||src.width,sh=src.naturalHeight||src.height,q=rot%180!==0;
+  const c=mk(q?sh:sw,q?sw:sh),x=c.getContext("2d");x.translate(c.width/2,c.height/2);x.rotate(rot*Math.PI/180);x.drawImage(src,-sw/2,-sh/2);return c;
+}
+function setRot(p,rot){
+  rot=((rot%360)+360)%360;if(!p.thumb0){p.thumb0=p.thumb;p.ar0=p.ar}
+  p.rot=rot;p.thumb=rot?rotCanvas(p.thumb0,rot):p.thumb0;p.ar=rot%180?1/p.ar0:p.ar0;p.fxKey=null;p.crop=null;
+}
+// gira no lugar: a caixa mantém o centro e a área, sem mexer no resto da montagem
+function rotateSel(dir){
+  if(!layout)return;const ids=(state.multi?[...state.msel]:state.sel?[state.sel]:[]).filter(id=>!isLocked(id));if(!ids.length)return;
+  snapshot();markEdited();
+  ids.forEach(id=>{const p=byId(id);if(!p)return;setRot(p,(p.rot||0)+dir*90);
+    const it=layout.items.find(i=>i.pid===id);if(!it||it.full)return;
+    const cx=it.x+it.w/2,cy=it.y+it.h/2,area=it.w*it.h;let w=Math.sqrt(area*p.ar),h=w/p.ar;
+    if(h>layout.ph*.96){h=layout.ph*.96;w=h*p.ar}
+    Object.assign(it,{x:cx-w/2,y:clamp(cy-h/2,0,layout.ph-h),w,h})});
+  drawPreview();
+}
+$("rotL").onclick=()=>rotateSel(-1);$("rotR").onclick=()=>rotateSel(1);$("multiRot").onclick=()=>rotateSel(1);
 
 /* ---------- painel de efeitos ---------- */
 const fxTargets=()=>(state.multi?[...state.msel]:state.sel?[state.sel]:[]).map(byId).filter(Boolean);
@@ -906,7 +932,7 @@ async function doExport(){
   const page=document.createElement("canvas");page.width=pw;page.height=ph;const ctx=page.getContext("2d");
   const cache=new Map(); // fotos em alta resolução só enquanto aparecem na página atual ou na próxima
   const get=async n=>{if(cache.has(n))return cache.get(n);const it=items[n],p=byId(it.pid);let src=p.thumb,u=null;
-    if(p.file){try{const r=await loadImg(p.file);src=r.im;u=r.u}catch(e){}}
+    if(p.file){try{const r=await loadImg(p.file);src=r.im;u=r.u;if(p.rot){src=rotCanvas(src,p.rot);URL.revokeObjectURL(u);u=null}}catch(e){}}
     let pre=null;
     if(hasFx(p.fx)){const iw=src.naturalWidth||src.width,ih=src.naturalHeight||src.height,c=cropWin(it,p),k=it.w/(c.sw*iw);
       pre=processImage(src,c.sx*iw,c.sy*ih,c.sw*iw,c.sh*ih,it.w,it.h,p.fx,Math.min(iw,ih)*k)}

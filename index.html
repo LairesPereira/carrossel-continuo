@@ -359,7 +359,7 @@ function pickFulls(photos,count,rng,P_,prefer){
   if(count<=0||!photos.length)return new Set();
   const pageAr=P_.pw/P_.ph,out=new Set();
   if(prefer)photos.forEach(p=>{if(out.size<count&&prefer.has(p.id))out.add(p.id)});
-  const cand=photos.filter(p=>!out.has(p.id)).map(p=>({id:p.id,w:Math.sqrt(Math.exp(-Math.pow(Math.log(p.ar/pageAr),2)/.5))*(.1+rng())}));
+  const cand=photos.filter(p=>!out.has(p.id)&&!p.noFull).map(p=>({id:p.id,w:Math.sqrt(Math.exp(-Math.pow(Math.log(p.ar/pageAr),2)/.5))*(.1+rng())}));
   cand.sort((x,y)=>y.w-x.w);
   for(const c of cand){if(out.size>=count)break;out.add(c.id)}
   return out;
@@ -877,16 +877,16 @@ function doSwap(aId,bId){
 function fillPage(){
   const it=selItem();if(!it)return;const p=byId(it.pid),{pw,ph}=layout;
   snapshot();
-  if(p.full){ // volta a ser foto normal; a página continua travada só se você quiser
+  if(it.full){ // volta a ser foto normal
     // sai da página inteira sem mexer nas outras fotos: fica na mesma página, no tamanho natural, centralizada
-    it.full=false;delete it.user;p.crop=null;const k=Math.round(it.x/pw);state.locks.delete(k);state.lockMembers.delete(k);
+    it.full=false;delete it.user;p.crop=null;p.noFull=true;/* não volta a ser sorteada como página inteira */const k=Math.round(it.x/pw);state.locks.delete(k);state.lockMembers.delete(k);
     let h=layout.Hu*.85,w=h*p.ar;if(w>pw*.86){w=pw*.86;h=w/p.ar}
     Object.assign(it,{x:k*pw+(pw-w)/2,y:(ph-h)/2,w,h});
     markEdited();state.pan=false;rulerKey="";drawPreview();toast("A foto saiu da página inteira",2200);return}
   const k=clamp(Math.floor((it.x+it.w/2)/pw),0,layout.P-1);
   // se outra foto já era página inteira ali, ela volta para a colagem
   layout.items.forEach(o=>{if(o.full&&Math.round(o.x/pw)===k&&o!==it){o.full=false;const q=byId(o.pid);if(q)q.crop=null}});
-  it.full=true;it.user=true;p.crop={cx:.5,cy:.5,z:1};
+  it.full=true;it.user=true;p.noFull=false;p.crop={cx:.5,cy:.5,z:1};
   Object.assign(it,{x:k*pw,y:0,w:pw,h:ph});
   state.locks.add(k);state.lockMembers.set(k,new Set([p.id]));
   computeLayout(true);

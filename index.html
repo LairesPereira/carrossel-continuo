@@ -149,6 +149,12 @@ canvas#strip.grab{touch-action:none}
       <button class="sq" id="pPlus" aria-label="Mais páginas">+</button>
       <div class="seg"><button id="pAuto" aria-pressed="true">Auto</button></div>
     </div>
+    <div class="ctl"><span class="lab">Estilo</span>
+      <div class="seg" id="styleSeg">
+        <button data-v="free" aria-pressed="true">Livre</button>
+        <button data-v="sym" aria-pressed="false">Simétrico</button>
+      </div>
+    </div>
     <div class="ctl"><span class="lab">Páginas inteiras</span>
       <div class="seg" id="fullSeg">
         <button data-v="0" aria-pressed="false">0%</button>
@@ -269,7 +275,7 @@ canvas#strip.grab{touch-action:none}
 const MAXP=20; // o Instagram aceita até 20 imagens por carrossel
 const FORMATS={"3:4":[1080,1440],"4:5":[1080,1350],"1:1":[1080,1080]};
 const state={photos:[],seed:20261107,format:"3:4",auto:true,pages:3,spacing:1,overlap:0,frame:true,shadow:false,
-  bg:"#FFFFFF",sel:null,swap:false,pan:false,sample:true,edited:false,fullPct:40,locks:new Set(),lockMembers:new Map(),multi:false,msel:new Set()};
+  bg:"#FFFFFF",sel:null,swap:false,pan:false,sample:true,edited:false,fullPct:40,style:"free",locks:new Set(),lockMembers:new Map(),multi:false,msel:new Set()};
 const trash=new Map();
 let layout=null, scale=1, dpr=1, viewX=0, exported=[], uid=0, undo=[], guides=[], rulerKey="";
 const $=id=>document.getElementById(id);
@@ -371,6 +377,36 @@ function allocPages(plans,avail){
   return out;
 }
 /* monta um trecho de páginas [a,b) com colagem e páginas inteiras intercaladas; x0/x1 podem estar recortados por fotos travadas vizinhas */
+/* ---------- modelos simétricos: todas as fotos da página do mesmo tamanho, alinhadas e centralizadas ---------- */
+const SYM_ROWS={1:[[1]],2:[[2],[1,1]],3:[[3],[1,1,1],[2,1],[1,2]],4:[[2,2],[4],[1,1,1,1]],5:[[2,1,2],[3,2],[2,3]],6:[[2,2,2],[3,3]],
+  7:[[2,3,2],[3,1,3],[4,3]],8:[[3,2,3],[2,2,2,2],[4,4]],9:[[3,3,3]],10:[[3,4,3]],11:[[4,3,4]],12:[[4,4,4],[3,3,3,3]]};
+function symRows(n){if(SYM_ROWS[n])return SYM_ROWS[n];const c=Math.ceil(Math.sqrt(n)),rows=[];let left=n;while(left>0){rows.push(Math.min(c,left));left-=c}return[rows]}
+function symPlace(group,x0,x1,P_,rng){
+  const n=group.length;if(!n)return[];
+  const g=P_.g*1.4,W=x1-x0-2*P_.E,AH=P_.Hu,mid=x0+(x1-x0)/2;
+  // proporção da célula: retrato 4:5, quadrada ou paisagem 3:2 (com 1 foto, a própria proporção dela)
+  const ratios=n===1?[group[0].ar]:[.8,1,1.5],opts=[];
+  for(const rows of symRows(n))for(const r of ratios){
+    const cols=Math.max(...rows),nr=rows.length;
+    const cw=Math.min((W-(cols-1)*g)/cols,((AH-(nr-1)*g)/nr)*r),ch=cw/r;if(cw<=0)continue;
+    const fit=group.reduce((t,p)=>t+Math.pow(Math.min(p.ar,r)/Math.max(p.ar,r),1.5),0)/n; // quanto menos corte, melhor
+    opts.push({rows,r,cw,ch,v:cw*ch*fit});
+  }
+  opts.sort((a,b)=>b.v-a.v);const good=opts.filter(o=>o.v>=opts[0].v*.82);const o=good[Math.floor(rng()*good.length)];
+  const nr=o.rows.length,blockH=nr*o.ch+(nr-1)*g,items=[];let y=P_.mv+(AH-blockH)/2,k=0;
+  o.rows.forEach(c=>{const rowW=c*o.cw+(c-1)*g;let x=mid-rowW/2;
+    for(let j=0;j<c;j++){items.push({pid:group[k++].id,x,y,w:o.cw,h:o.ch});x+=o.cw+g}y+=o.ch+g});
+  return items;
+}
+// divide as fotos em grupos por página (tamanhos parecidos, com um pouco de variação)
+function symGroups(photos,k,rng){
+  const n=photos.length;k=Math.max(1,Math.min(k,n));const sizes=Array(k).fill(Math.floor(n/k));
+  for(let e=n%k;e>0;){const i=Math.floor(rng()*k);if(sizes[i]===Math.floor(n/k)){sizes[i]++;e--}}
+  if(k>1&&rng()<.35){const i=Math.floor(rng()*(k-1));if(sizes[i]>1){sizes[i]--;sizes[i+1]++}}
+  const out=[];let s0=0;sizes.forEach(z=>{out.push(photos.slice(s0,s0+z));s0+=z});return out;
+}
+const symPagesFor=n=>n?Math.ceil(n/2.6):0;
+const chunkPages=(c,P_)=>state.style==="sym"?symPagesFor(c.length):autoPages(plan(c,rngFrom(7),P_),0,P_);
 function layoutRun(photos,F,a,b,x0,x1,rng,P_){
   let {chunks,fulls}=splitChunks(photos,F);
   const R=b-a;
@@ -379,10 +415,15 @@ function layoutRun(photos,F,a,b,x0,x1,rng,P_){
     if(R-fulls.length>=nonEmpty||!fulls.length)break;
     const drop=fulls.pop();const last=chunks.pop();chunks[chunks.length-1].push(drop,...last); // volta para a colagem
   }
-  const plans=chunks.map(c=>plan(c,rng,P_)),pages=allocPages(plans,R-fulls.length);
+  const sym=state.style==="sym";
+  const plans=chunks.map(c=>sym?{blocks:c,sA:c.length}:plan(c,rng,P_)),pages=allocPages(plans,R-fulls.length);
   const items=[],fullItems=[];let cur=a,minS=P_.Hu;
   chunks.forEach((c,i)=>{
-    if(pages[i]>0){const xa=cur===a?x0:cur*P_.pw,xb=cur+pages[i]===b?x1:(cur+pages[i])*P_.pw;
+    if(pages[i]>0&&sym){
+      symGroups(c,pages[i],rng).forEach((grp,j)=>{const pa=cur+j,xa=pa===a?x0:pa*P_.pw,xb=pa+1===b?x1:(pa+1)*P_.pw;
+        items.push(...symPlace(grp,xa,xb,P_,rng));if(grp.length>4)minS=Math.min(minS,P_.Hu*.6)});
+      cur+=pages[i]}
+    else if(pages[i]>0){const xa=cur===a?x0:cur*P_.pw,xb=cur+pages[i]===b?x1:(cur+pages[i])*P_.pw;
       const r=place(plans[i],xa,xb,P_);items.push(...r.items);minS=Math.min(minS,r.S);cur+=pages[i]}
     if(i<fulls.length){fullItems.push({pid:fulls[i].id,x:cur*P_.pw,y:0,w:P_.pw,h:P_.ph,full:true});cur++}
   });
@@ -391,7 +432,7 @@ function layoutRun(photos,F,a,b,x0,x1,rng,P_){
 function layoutFresh(rng,prefer){
   const P_=prm(),photos=state.photos,F=pickFulls(photos,fullTarget(photos.length),rng,P_,prefer);
   const {chunks,fulls}=splitChunks(photos,F);
-  let P;const need=()=>{const {chunks,fulls}=splitChunks(photos,F);let n=fulls.length;chunks.forEach(c=>{n+=autoPages(plan(c,rngFrom(7),P_),0,P_)});return n};
+  let P;const need=()=>{const {chunks,fulls}=splitChunks(photos,F);let n=fulls.length;chunks.forEach(c=>{n+=chunkPages(c,P_)});return n};
   if(state.auto){P=need();while(P>MAXP&&F.size){F.delete([...F].pop());P=need()}}
   else P=Math.max(state.pages,fulls.length+chunks.filter(c=>c.length).length);
   P=Math.max(1,Math.min(MAXP,P));
@@ -872,7 +913,7 @@ function segBind(id,key,conv,onChange){$(id).querySelectorAll("button").forEach(
   $(id).querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",x===b));state[key]=conv(b.dataset.v);
   onChange&&onChange();if(state.edited)state.auto=true;undo=[];refresh()})}
 segBind("fmt","format",v=>v,()=>{clearLocks();state.photos.forEach(p=>{p.crop=null});layout=null;state.sel=null});
-segBind("spc","spacing",v=>+v);segBind("fullSeg","fullPct",v=>+v);
+segBind("spc","spacing",v=>+v);segBind("fullSeg","fullPct",v=>+v);segBind("styleSeg","style",v=>v);
 // sorteia uma foto da colagem e transforma em página inteira (a página fica travada)
 $("randFull").onclick=()=>{
   if(!layout)return;const pw=layout.pw,clampP=x=>clamp(Math.floor(x/pw),0,layout.P-1);
@@ -907,8 +948,10 @@ function shufflePage(k){
   const seed=Math.floor(Math.random()*1e9),rng=rngFrom(seed);
   let photos=mine.map(i=>byId(i.pid)).filter(Boolean);
   if(photos.length>1&&rng()<.6)for(let i=photos.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));[photos[i],photos[j]]=[photos[j],photos[i]]}
-  const cands=[];for(let t=0;t<8;t++){const r=place(plan(photos,rng,P_),x0,x1,P_);cands.push(r)}
-  cands.sort((p,q)=>q.S-p.S);const pick=cands[Math.floor(rng()*Math.min(3,cands.length))];
+  let pick;
+  if(state.style==="sym")pick={items:symPlace(photos,x0,x1,P_,rng)};
+  else{const cands=[];for(let t=0;t<8;t++){const r=place(plan(photos,rng,P_),x0,x1,P_);cands.push(r)}
+    cands.sort((p,q)=>q.S-p.S);pick=cands[Math.floor(rng()*Math.min(3,cands.length))]}
   snapshot();markEdited();
   const firstIdx=layout.items.findIndex(i=>set.has(i.pid));
   layout.items=layout.items.filter(i=>!set.has(i.pid));layout.items.splice(Math.max(0,firstIdx),0,...pick.items);

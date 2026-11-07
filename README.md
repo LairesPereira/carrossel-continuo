@@ -5,6 +5,7 @@ Roda inteiro no navegador: sem login, sem banco de dados, as fotos nunca saem do
 
 ## O que faz
 - Recebe várias fotos e monta a colagem automaticamente; **Reembaralhar** gera novas composições.
+- Dois estilos de colagem: **Livre** (espalhada, sem simetria, fotos passando pelas divisas) e **Simétrico** (modelos prontos: todas as fotos da página do mesmo tamanho, alinhadas e centralizadas).
 - Linhas de corte e numeração mostram onde cada post termina.
 - Formatos 3:4 (1080×1440), 4:5 (1080×1350) e 1:1 (1080×1080).
 - Sobreposição de fotos, contorno e sombra opcionais.

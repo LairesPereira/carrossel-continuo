@@ -9,7 +9,8 @@ Roda inteiro no navegador: sem login, sem banco de dados, as fotos nunca saem do
 - Formatos 3:4 (1080×1440), 4:5 (1080×1350) e 1:1 (1080×1080).
 - Sobreposição de fotos, contorno e sombra opcionais.
 - Arrastar, redimensionar, trocar de lugar, trazer à frente/enviar para trás.
-- Foto ocupando a página inteira, com enquadramento e zoom ajustáveis.
+- Páginas inteiras automáticas (0%, 20%, 40% ou 60% das fotos; padrão 40%), com enquadramento e zoom ajustáveis.
+- Botão para sortear mais uma foto como página inteira.
 - Cadeado por página: páginas travadas não mudam ao reembaralhar; as fotos que já estavam nelas ficam protegidas, mas outras fotos podem entrar por cima ou por baixo.
 - Efeitos por foto: granulação, desfoque, desfoque de movimento com direção, preto e branco com intensidade.
 - Seleção de várias fotos para excluir ou aplicar efeitos de uma vez (com Desfazer).

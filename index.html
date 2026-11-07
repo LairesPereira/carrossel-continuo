@@ -145,6 +145,15 @@ canvas#strip.grab{touch-action:none}
       <button class="sq" id="pPlus" aria-label="Mais páginas">+</button>
       <div class="seg"><button id="pAuto" aria-pressed="true">Auto</button></div>
     </div>
+    <div class="ctl"><span class="lab">Páginas inteiras</span>
+      <div class="seg" id="fullSeg">
+        <button data-v="0" aria-pressed="false">0%</button>
+        <button data-v="20" aria-pressed="false">20%</button>
+        <button data-v="40" aria-pressed="true">40%</button>
+        <button data-v="60" aria-pressed="false">60%</button>
+      </div>
+      <button id="randFull">Sortear página inteira</button>
+    </div>
     <div class="ctl"><span class="lab">Respiro</span>
       <div class="seg" id="spc">
         <button data-v="0" aria-pressed="false">Justo</button>
@@ -252,7 +261,7 @@ canvas#strip.grab{touch-action:none}
 <script>
 const FORMATS={"3:4":[1080,1440],"4:5":[1080,1350],"1:1":[1080,1080]};
 const state={photos:[],seed:20261107,format:"3:4",auto:true,pages:3,spacing:1,overlap:0,frame:true,shadow:false,
-  bg:"#FFFFFF",sel:null,swap:false,pan:false,sample:true,edited:false,locks:new Set(),lockMembers:new Map(),multi:false,msel:new Set()};
+  bg:"#FFFFFF",sel:null,swap:false,pan:false,sample:true,edited:false,fullPct:40,locks:new Set(),lockMembers:new Map(),multi:false,msel:new Set()};
 const trash=new Map();
 let layout=null, scale=1, dpr=1, exported=[], uid=0, undo=[], guides=[], rulerKey="";
 const $=id=>document.getElementById(id);
@@ -328,11 +337,56 @@ function place(pl,x0,x1,P_){
   });
   return{items,S:Sr};
 }
-function layoutFresh(rng){
-  const P_=prm(),pl=plan(state.photos,rng,P_);let P;
-  if(state.auto){P=1;while(solveS(pl,P*P_.pw,P_)<.72*P_.Hu&&P<40)P++}else P=state.pages;
-  const r=place(pl,0,P*P_.pw,P_);
-  return{P,pw:P_.pw,ph:P_.ph,mv:P_.mv,Hu:P_.Hu,items:r.items,S:r.S};
+/* ---------- páginas inteiras ---------- */
+// escolhe quais fotos viram página inteira; prefere fotos com proporção parecida com a da página (menos corte)
+function pickFulls(photos,count,rng,P_,prefer){
+  if(count<=0||!photos.length)return new Set();
+  const pageAr=P_.pw/P_.ph,out=new Set();
+  if(prefer)photos.forEach(p=>{if(out.size<count&&prefer.has(p.id))out.add(p.id)});
+  const cand=photos.filter(p=>!out.has(p.id)).map(p=>({id:p.id,w:Math.sqrt(Math.exp(-Math.pow(Math.log(p.ar/pageAr),2)/.5))*(.1+rng())}));
+  cand.sort((x,y)=>y.w-x.w);
+  for(const c of cand){if(out.size>=count)break;out.add(c.id)}
+  return out;
+}
+const fullTarget=n=>{if(!state.fullPct||n<2)return 0;const t=Math.round(n*state.fullPct/100);return Math.min(t,n>=3?n-2:n-1)};
+function splitChunks(photos,F){const chunks=[[]],fulls=[];
+  photos.forEach(p=>{if(F.has(p.id)){fulls.push(p);chunks.push([])}else chunks[chunks.length-1].push(p)});return{chunks,fulls}}
+const autoPages=(pl,T0,P_)=>{if(!pl.blocks.length)return 0;let P=1;while(solveS(pl,P*P_.pw-T0,P_)<.72*P_.Hu&&P<40)P++;return P};
+// distribui `avail` páginas entre os trechos de colagem (mínimo 1 para cada trecho com fotos)
+function allocPages(plans,avail){
+  const ne=plans.map((pl,i)=>pl.blocks.length?i:-1).filter(i=>i>=0),out=plans.map(()=>0);
+  if(!ne.length)return out;ne.forEach(i=>out[i]=1);let left=avail-ne.length;
+  const tot=ne.reduce((s,i)=>s+plans[i].sA,0)||1;
+  while(left>0){let bi=ne[0],bv=-Infinity;ne.forEach(i=>{const v=plans[i].sA/tot*avail-out[i];if(v>bv){bv=v;bi=i}});out[bi]++;left--}
+  return out;
+}
+/* monta um trecho de páginas [a,b) com colagem e páginas inteiras intercaladas; x0/x1 podem estar recortados por fotos travadas vizinhas */
+function layoutRun(photos,F,a,b,x0,x1,rng,P_){
+  let {chunks,fulls}=splitChunks(photos,F);
+  const R=b-a;
+  for(;;){
+    const nonEmpty=chunks.filter(c=>c.length).length;
+    if(R-fulls.length>=nonEmpty||!fulls.length)break;
+    const drop=fulls.pop();const last=chunks.pop();chunks[chunks.length-1].push(drop,...last); // volta para a colagem
+  }
+  const plans=chunks.map(c=>plan(c,rng,P_)),pages=allocPages(plans,R-fulls.length);
+  const items=[],fullItems=[];let cur=a,minS=P_.Hu;
+  chunks.forEach((c,i)=>{
+    if(pages[i]>0){const xa=cur===a?x0:cur*P_.pw,xb=cur+pages[i]===b?x1:(cur+pages[i])*P_.pw;
+      const r=place(plans[i],xa,xb,P_);items.push(...r.items);minS=Math.min(minS,r.S);cur+=pages[i]}
+    if(i<fulls.length){fullItems.push({pid:fulls[i].id,x:cur*P_.pw,y:0,w:P_.pw,h:P_.ph,full:true});cur++}
+  });
+  return{items,fullItems,minS};
+}
+function layoutFresh(rng,prefer){
+  const P_=prm(),photos=state.photos,F=pickFulls(photos,fullTarget(photos.length),rng,P_,prefer);
+  const {chunks,fulls}=splitChunks(photos,F);
+  let P;
+  if(state.auto){P=fulls.length;chunks.forEach(c=>{P+=autoPages(plan(c,rngFrom(7),P_),0,P_)})}
+  else P=Math.max(state.pages,fulls.length+chunks.filter(c=>c.length).length);
+  P=Math.max(1,P);
+  const r=layoutRun(photos,F,0,P,0,P*P_.pw,rng,P_);
+  return{P,pw:P_.pw,ph:P_.ph,mv:P_.mv,Hu:P_.Hu,items:[...r.fullItems,...r.items],S:r.minS};
 }
 /* páginas travadas: mantém o que está nelas e redistribui o resto nos espaços livres */
 function frozenFrom(L){
@@ -340,67 +394,77 @@ function frozenFrom(L){
   const keep=it=>{if(!ids.has(it.pid)&&byId(it.pid)){ids.add(it.pid);out.push({...it})}};
   [...state.locks].sort((a,b)=>a-b).forEach(k=>{
     const x0=k*pw,x1=x0+pw;
-    const full=L.items.find(it=>byId(it.pid)?.full&&Math.abs(it.x-x0)<1);
+    const full=L.items.find(it=>it.full&&Math.abs(it.x-x0)<1);
     if(full){keep(full);return}
-    L.items.forEach(it=>{if(it.x<x1-1&&it.x+it.w>x0+1&&!byId(it.pid)?.full)keep(it)});
+    L.items.forEach(it=>{if(it.x<x1-1&&it.x+it.w>x0+1&&!it.full)keep(it)});
   });
-  // a ordem de desenho original é preservada
   const order=new Map(L.items.map((it,k)=>[it.pid,k]));
   out.sort((a,b)=>order.get(a.pid)-order.get(b.pid));
   return{frozen:out,ids};
 }
 function runsFor(P,frozen,pw){
   const runs=[];let k=0;
-  while(k<P){if(state.locks.has(k)){k++;continue}let j=k;while(j<P&&!state.locks.has(j))j++;runs.push([k*pw,j*pw]);k=j}
-  return runs.map(([x0,x1])=>{
-    for(const it of frozen){if(byId(it.pid)?.full)continue;
-      if(it.x<x0+1&&it.x+it.w>x0)x0=Math.max(x0,it.x+it.w);
-      if(it.x+it.w>x1-1&&it.x<x1)x1=Math.min(x1,it.x)}
-    return[x0,x1]}).filter(([a,b])=>b-a>pw*.3);
+  while(k<P){if(state.locks.has(k)){k++;continue}let j=k;while(j<P&&!state.locks.has(j))j++;runs.push({a:k,b:j,x0:k*pw,x1:j*pw});k=j}
+  return runs.map(r=>{
+    for(const it of frozen){if(it.full)continue;
+      if(it.x<r.x0+1&&it.x+it.w>r.x0)r.x0=Math.max(r.x0,it.x+it.w);
+      if(it.x+it.w>r.x1-1&&it.x<r.x1)r.x1=Math.min(r.x1,it.x)}
+    return r}).filter(r=>r.x1-r.x0>pw*.3);
 }
-function layoutLocked(rng,prev){
+function layoutLocked(rng,prev,prefer){
   const P_=prm(),{frozen,ids}=frozenFrom(prev);
   const free=state.photos.filter(p=>!ids.has(p.id));
+  // páginas inteiras criadas por você (Preencher/Sortear) são extras; as automáticas travadas contam nos 40%
+  const autoFrozen=frozen.filter(it=>it.full&&!it.user).length;
+  const F=pickFulls(free,Math.max(0,Math.min(fullTarget(state.photos.length)-autoFrozen,free.length>=3?free.length-2:free.length-1)),rng,P_,prefer);
+  const dem=p=>F.has(p.id)?1:.8,totDem=free.reduce((t,p)=>t+dem(p),0);
   const Pmin=Math.max(1,...[...state.locks].map(k=>k+1));
   let P=state.auto?Pmin:Math.max(Pmin,prev.P),res=null;
-  for(let guard=0;guard<40;guard++){
+  for(let guard=0;guard<60;guard++){
     const runs=runsFor(P,frozen,P_.pw);
     if(free.length&&!runs.length){P++;continue}
-    const tot=runs.reduce((s,[a,b])=>s+b-a,0);let acc=0,start=0,items=[],minS=P_.Hu;
-    runs.forEach(([a,b],r)=>{acc+=b-a;const end=r===runs.length-1?free.length:Math.round(free.length*acc/tot);
-      const chunk=free.slice(start,end);start=end;
-      if(!chunk.length)return;
-      const out=place(plan(chunk,rng,P_),a,b,P_);items.push(...out.items);minS=Math.min(minS,out.S)});
-    res={P,items,minS};
-    if(state.auto&&free.length&&minS<.72*P_.Hu&&P<40){P++;continue}
+    // reparte as fotos entre os trechos livres pela "demanda" de páginas (página inteira = 1 página)
+    const tot=runs.reduce((s,r)=>s+r.x1-r.x0,0);let acc=0,start=0,items=[],fullItems=[],minS=P_.Hu;
+    runs.forEach((r,i)=>{acc+=r.x1-r.x0;let end=start,d=0;const goal=totDem*acc/tot;
+      if(i===runs.length-1)end=free.length;else while(end<free.length&&d+dem(free[end])/2<=goal-(free.slice(0,start).reduce((t,p)=>t+dem(p),0))){d+=dem(free[end]);end++}
+      const chunk=free.slice(start,end);start=end;if(!chunk.length)return;
+      const out=layoutRun(chunk,F,r.a,r.b,r.x0,r.x1,rng,P_);items.push(...out.items);fullItems.push(...out.fullItems);minS=Math.min(minS,out.minS)});
+    res={P,items,fullItems,minS};
+    const wanted=F.size,got=fullItems.length;
+    if(state.auto&&free.length&&(minS<.72*P_.Hu||got<wanted)&&P<40){P++;continue}
     break;
   }
-  const fullFirst=frozen.filter(it=>byId(it.pid)?.full),rest=frozen.filter(it=>!byId(it.pid)?.full);
-  return{P:res.P,pw:P_.pw,ph:P_.ph,mv:P_.mv,Hu:P_.Hu,items:[...fullFirst,...res.items,...rest],S:res.minS};
+  const fullFirst=frozen.filter(it=>it.full),rest=frozen.filter(it=>!it.full);
+  return{P:res.P,pw:P_.pw,ph:P_.ph,mv:P_.mv,Hu:P_.Hu,items:[...fullFirst,...res.fullItems,...res.items,...rest],S:res.minS};
 }
 function score(L){
   let p=0;const lim=.09*L.pw;
-  for(const it of L.items){if(byId(it.pid)?.full)continue;for(let k=1;k<L.P;k++){const s=k*L.pw;
+  for(const it of L.items){if(it.full)continue;for(let k=1;k<L.P;k++){const s=k*L.pw;
     if(it.x<s&&it.x+it.w>s){const d=Math.min(s-it.x,it.x+it.w-s);if(d<lim)p+=(lim-d)/L.pw*25;else p-=.25}}}
   for(let k=1;k<=L.P;k++){const a=(k-1)*L.pw,bnd=k*L.pw;let cov=0;
     for(const it of L.items)cov+=Math.max(0,Math.min(bnd,it.x+it.w)-Math.max(a,it.x));
     if(cov<L.pw*.3)p+=3}
   p+=(1-Math.min(1,L.S/L.Hu))*2;
+  // páginas inteiras seguidas ficam repetitivas
+  const fx=L.items.filter(i=>i.full).map(i=>Math.round(i.x/L.pw)).sort((a,b)=>a-b);
+  for(let i=1;i<fx.length;i++)if(fx[i]===fx[i-1]+1)p+=1.2;
   return p;
 }
-function computeLayout(){
+// keepFull: mantém as páginas inteiras atuais sempre que possível (usado ao mexer numa página, não ao reembaralhar)
+function computeLayout(keepFull){
   state.edited=false;
   if(!state.photos.length){layout=null;clearLocks();return}
   const prev=layout,locked=prev&&state.locks.size>0;
   if(!locked)clearLocks();
+  const prefer=keepFull&&prev?new Set(prev.items.filter(i=>i.full).map(i=>i.pid)):null;
   let best=null,bs=Infinity;
-  for(let k=0;k<16;k++){const rng=rngFrom(state.seed*31+k*977);const L=locked?layoutLocked(rng,prev):layoutFresh(rng);const s=score(L);if(s<bs){bs=s;best=L}}
+  for(let k=0;k<16;k++){const rng=rngFrom(state.seed*31+k*977);const L=locked?layoutLocked(rng,prev,prefer):layoutFresh(rng,prefer);const s=score(L);if(s<bs){bs=s;best=L}}
   layout=best;
 }
 
 /* ---------- drawing ---------- */
 const inter=(a,b)=>a.x<b.x+b.w&&b.x<a.x+a.w&&a.y<b.y+b.h&&b.y<a.y+a.h;
-function overlapFlags(items){return items.map((it,k)=>!byId(it.pid)?.full&&items.slice(0,k).some(o=>inter(o,it)))}
+function overlapFlags(items){return items.map((it,k)=>!it.full&&items.slice(0,k).some(o=>inter(o,it)))}
 function cropWin(it,p){
   const B=it.w/it.h,A=p.ar,c=p.crop||{cx:.5,cy:.5,z:1};
   let sw,sh;if(A>B){sh=1;sw=B/A}else{sw=1;sh=A/B}
@@ -409,7 +473,7 @@ function cropWin(it,p){
 }
 function drawItem(ctx,it,p,src,ox,overl,pxScale,pre){
   const x=it.x-ox,{y,w,h}=it,pw=layout.pw,fw=pw*.009;
-  if(state.shadow&&!p.full){ctx.save();ctx.shadowColor=state.bg==="#141414"?"rgba(0,0,0,.6)":"rgba(0,0,0,.24)";
+  if(state.shadow&&!it.full){ctx.save();ctx.shadowColor=state.bg==="#141414"?"rgba(0,0,0,.6)":"rgba(0,0,0,.24)";
     ctx.shadowBlur=pw*.022*pxScale;ctx.shadowOffsetY=pw*.006*pxScale;ctx.fillStyle=state.bg;
     const f=state.frame&&overl?fw:0;ctx.fillRect(x-f,y-f,w+2*f,h+2*f);ctx.restore()}
   if(state.frame&&overl){ctx.fillStyle=state.bg;ctx.fillRect(x-fw,y-fw,w+2*fw,h+2*fw)}
@@ -468,7 +532,7 @@ function fxSrc(p){
 function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
 let rafId=0;function requestDraw(){if(!rafId)rafId=requestAnimationFrame(()=>{rafId=0;drawPreview()})}
 const selItem=()=>layout?.items.find(it=>it.pid===state.sel);
-const panning=()=>{const it=selItem();return!!it&&(state.pan||byId(it.pid)?.full)};
+const panning=()=>{const it=selItem();return!!it&&(state.pan||!!it.full)};
 function drawPreview(){
   const cv=$("strip"),ctx=cv.getContext("2d"),ruler=$("ruler");
   if(!layout){cv.width=cv.height=0;cv.style.width=cv.style.height="0";ruler.innerHTML="";rulerKey="";updateMeta();return}
@@ -509,7 +573,7 @@ function drawPreview(){
   updateMeta();
 }
 function buildRuler(){
-  const {P,pw}=layout,fullPages=new Set(layout.items.filter(it=>byId(it.pid)?.full).map(it=>Math.round(it.x/pw)));
+  const {P,pw}=layout,fullPages=new Set(layout.items.filter(it=>it.full).map(it=>Math.round(it.x/pw)));
   const key=[P,scale.toFixed(4),[...state.locks].sort().join(","),[...fullPages].join(",")].join("|");
   if(key===rulerKey)return;rulerKey=key;
   const ruler=$("ruler");ruler.innerHTML="";
@@ -518,10 +582,7 @@ function buildRuler(){
     const lab=document.createElement("span");lab.textContent=`${k+1}/${P}`;d.appendChild(lab);
     const b=document.createElement("button");b.className="lock";const on=state.locks.has(k);
     b.setAttribute("aria-pressed",on);b.innerHTML=(on?LOCK_SVG:UNLOCK_SVG)+(on?"Travada":"Travar");
-    if(fullPages.has(k)){b.title="Toque para destravar e devolver a foto para a colagem";
-      b.onclick=()=>{const it=layout.items.find(i=>byId(i.pid)?.full&&Math.round(i.x/pw)===k);if(!it)return;
-        state.sel=it.pid;state.pan=false;fillPage();state.sel=null;drawPreview();toast(`Página ${k+1} destravada`,2200)}}
-    else b.onclick=()=>{if(state.locks.has(k)){state.locks.delete(k);state.lockMembers.delete(k)}else{state.locks.add(k);state.lockMembers.set(k,membersOf(k));if(state.sel&&isLocked(state.sel)){state.sel=null;state.pan=false}}rulerKey="";drawPreview();
+    b.onclick=()=>{if(state.locks.has(k)){state.locks.delete(k);state.lockMembers.delete(k)}else{state.locks.add(k);state.lockMembers.set(k,membersOf(k));if(state.sel&&isLocked(state.sel)){state.sel=null;state.pan=false}}rulerKey="";drawPreview();
       toast(state.locks.has(k)?`Página ${k+1} travada: não muda ao reembaralhar`:`Página ${k+1} liberada`,2200)};
     b.setAttribute("aria-label",`${on?"Destravar":"Travar"} página ${k+1}`);
     d.appendChild(b);ruler.appendChild(d);
@@ -536,10 +597,10 @@ function updateMeta(){
   $("selbar").hidden=!state.sel;
   $("swapBtn").setAttribute("aria-pressed",state.swap);
   if(sp){
-    $("fillBtn").textContent=sp.full?"Sair da página inteira":"Preencher página";
-    $("panBtn").setAttribute("aria-pressed",panning());$("panBtn").disabled=!!sp.full;
+    $("fillBtn").textContent=sel.full?"Sair da página inteira":"Preencher página";
+    $("panBtn").setAttribute("aria-pressed",panning());$("panBtn").disabled=!!sel.full;
     $("zoomBox").hidden=!panning();$("zNum").textContent=(sp.crop?.z||1).toFixed(1).replace(".",",")+"×";
-    const fr=sp.full;$("frontBtn").disabled=fr;$("backBtn").disabled=fr;
+    const fr=!!sel.full;$("frontBtn").disabled=fr;$("backBtn").disabled=fr;
   }
   $("strip").classList.toggle("grab",!!state.sel);
   $("modeTag").hidden=!state.edited;$("resetBtn").hidden=!state.edited;
@@ -557,7 +618,7 @@ function updateMeta(){
 function refresh(){computeLayout();rulerKey="";drawPreview()}
 function snapshot(){
   undo.push(JSON.stringify({items:layout.items,P:layout.P,order:state.photos.map(p=>p.id),
-    ph:state.photos.map(p=>[p.id,p.full||false,p.crop||null,p.fx||null]),locks:[...state.locks],lm:[...state.lockMembers].map(([k,v])=>[k,[...v]])}));
+    ph:state.photos.map(p=>[p.id,false,p.crop||null,p.fx||null]),locks:[...state.locks],lm:[...state.lockMembers].map(([k,v])=>[k,[...v]])}));
   if(undo.length>40)undo.shift();
 }
 function markEdited(){state.edited=true}
@@ -619,7 +680,7 @@ cv.addEventListener("pointerdown",e=>{
   if(state.swap&&it.pid===state.sel){state.swap=false;requestDraw();return}
   if(state.sel!==it.pid)state.pan=false;
   state.sel=it.pid;
-  if(byId(it.pid)?.full){requestDraw();return}
+  if(it.full){requestDraw();return}
   drag={mode:"move",it,orig:{...it},start:pt,moved:false,id:e.pointerId};
   try{cv.setPointerCapture(e.pointerId)}catch(_){}
   requestDraw();
@@ -681,10 +742,10 @@ function doSwap(aId,bId){
   const A=layout.items.find(i=>i.pid===aId),B=layout.items.find(i=>i.pid===bId);
   const pa=byId(aId),pb=byId(bId);
   const fit=(box,p)=>{const cx=box.x+box.w/2,cy=box.y+box.h/2,area=box.w*box.h,w=Math.sqrt(area*p.ar),h=w/p.ar;return{x:cx-w/2,y:cy-h/2,w,h}};
-  const boxA={x:A.x,y:A.y,w:A.w,h:A.h},boxB={x:B.x,y:B.y,w:B.w,h:B.h},fa=!!pa.full,fb=!!pb.full;
+  const boxA={x:A.x,y:A.y,w:A.w,h:A.h},boxB={x:B.x,y:B.y,w:B.w,h:B.h},fa=!!A.full,fb=!!B.full;
   // quem cai numa página inteira assume a caixa da página e vira foto de página inteira
   Object.assign(A,fa?boxA:fit(boxA,pb),{pid:bId});Object.assign(B,fb?boxB:fit(boxB,pa),{pid:aId});
-  pb.full=fa;pa.full=fb;if(fa||fb){pa.crop=null;pb.crop=null}
+  if(fa||fb){pa.crop=null;pb.crop=null}
   const ia=state.photos.indexOf(pa),ib=state.photos.indexOf(pb);state.photos[ia]=pb;state.photos[ib]=pa;
   state.swap=false;state.sel=null;state.pan=false;rulerKey="";drawPreview();
 }
@@ -693,17 +754,17 @@ function fillPage(){
   snapshot();
   if(p.full){ // volta a ser foto normal; a página continua travada só se você quiser
     // sai da página inteira sem mexer nas outras fotos: fica na mesma página, no tamanho natural, centralizada
-    p.full=false;p.crop=null;const k=Math.round(it.x/pw);state.locks.delete(k);state.lockMembers.delete(k);
+    it.full=false;delete it.user;p.crop=null;const k=Math.round(it.x/pw);state.locks.delete(k);state.lockMembers.delete(k);
     let h=layout.Hu*.85,w=h*p.ar;if(w>pw*.86){w=pw*.86;h=w/p.ar}
     Object.assign(it,{x:k*pw+(pw-w)/2,y:(ph-h)/2,w,h});
     markEdited();state.pan=false;rulerKey="";drawPreview();toast("A foto saiu da página inteira",2200);return}
   const k=clamp(Math.floor((it.x+it.w/2)/pw),0,layout.P-1);
   // se outra foto já era página inteira ali, ela volta para a colagem
-  layout.items.forEach(o=>{const q=byId(o.pid);if(q&&q.full&&Math.round(o.x/pw)===k&&o!==it){q.full=false;q.crop=null}});
-  p.full=true;p.crop={cx:.5,cy:.5,z:1};
+  layout.items.forEach(o=>{if(o.full&&Math.round(o.x/pw)===k&&o!==it){o.full=false;const q=byId(o.pid);if(q)q.crop=null}});
+  it.full=true;it.user=true;p.crop={cx:.5,cy:.5,z:1};
   Object.assign(it,{x:k*pw,y:0,w:pw,h:ph});
   state.locks.add(k);state.lockMembers.set(k,new Set([p.id]));
-  computeLayout();
+  computeLayout(true);
   state.sel=p.id;rulerKey="";drawPreview();
   toast(`Foto ocupando a página ${k+1}. Arraste para escolher o enquadramento.`,3200);
 }
@@ -726,8 +787,17 @@ $("pPlus").onclick=()=>setPages((layout?layout.P:state.pages)+1);
 function segBind(id,key,conv,onChange){$(id).querySelectorAll("button").forEach(b=>b.onclick=()=>{
   $(id).querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",x===b));state[key]=conv(b.dataset.v);
   onChange&&onChange();if(state.edited)state.auto=true;undo=[];refresh()})}
-segBind("fmt","format",v=>v,()=>{clearLocks();state.photos.forEach(p=>{p.full=false;p.crop=null});layout=null;state.sel=null});
-segBind("spc","spacing",v=>+v);segBind("ovl","overlap",v=>+v);
+segBind("fmt","format",v=>v,()=>{clearLocks();state.photos.forEach(p=>{p.crop=null});layout=null;state.sel=null});
+segBind("spc","spacing",v=>+v);segBind("fullSeg","fullPct",v=>+v);
+// sorteia uma foto da colagem e transforma em página inteira (a página fica travada)
+$("randFull").onclick=()=>{
+  if(!layout)return;const pw=layout.pw,clampP=x=>clamp(Math.floor(x/pw),0,layout.P-1);
+  const fullPages=new Set(layout.items.filter(i=>i.full).map(i=>Math.round(i.x/pw)));
+  const cand=layout.items.filter(i=>!i.full&&!isLocked(i.pid)&&!state.locks.has(clampP(i.x+i.w/2))&&!fullPages.has(clampP(i.x+i.w/2)));
+  if(!cand.length){toast("Não há outra foto disponível para virar página inteira",2600);return}
+  const it=cand[Math.floor(Math.random()*cand.length)];
+  state.multi=false;state.msel.clear();state.swap=false;state.pan=false;state.sel=it.pid;fillPage();
+};segBind("ovl","overlap",v=>+v);
 $("frameTog").onclick=e=>{state.frame=!state.frame;e.currentTarget.setAttribute("aria-pressed",state.frame);drawPreview()};
 $("shadowTog").onclick=e=>{state.shadow=!state.shadow;e.currentTarget.setAttribute("aria-pressed",state.shadow);drawPreview()};
 document.querySelectorAll(".sw").forEach(b=>b.onclick=()=>{document.querySelectorAll(".sw").forEach(x=>x.setAttribute("aria-pressed",x===b));state.bg=b.dataset.bg;drawPreview()});
@@ -737,13 +807,13 @@ $("zIn").onclick=()=>zoomBy(1.2);$("zOut").onclick=()=>zoomBy(1/1.2);
 $("swapBtn").onclick=()=>{state.swap=!state.swap;drawPreview()};
 $("frontBtn").onclick=()=>{snapshot();markEdited();const k=layout.items.findIndex(i=>i.pid===state.sel);layout.items.push(...layout.items.splice(k,1));drawPreview()};
 $("backBtn").onclick=()=>{snapshot();markEdited();const k=layout.items.findIndex(i=>i.pid===state.sel);
-  const firstNonFull=layout.items.findIndex(i=>!byId(i.pid)?.full);const [m]=layout.items.splice(k,1);layout.items.splice(Math.max(0,firstNonFull),0,m);drawPreview()};
+  const firstNonFull=layout.items.findIndex(i=>!i.full);const [m]=layout.items.splice(k,1);layout.items.splice(Math.max(0,firstNonFull),0,m);drawPreview()};
 function removePhotos(ids){
   ids=ids.filter(id=>!isLocked(id));if(!ids.length)return;
   if(layout)snapshot();
   const set=new Set(ids);
   ids.forEach(id=>{const it=layout?.items.find(i=>i.pid===id),p=byId(id);
-    if(p?.full&&it){const k=Math.round(it.x/layout.pw);state.locks.delete(k);state.lockMembers.delete(k)}if(p)trash.set(id,p)});
+    if(it?.full){const k=Math.round(it.x/layout.pw);state.locks.delete(k);state.lockMembers.delete(k)}if(p)trash.set(id,p)});
   state.sel=null;state.swap=false;state.pan=false;state.msel.clear();
   state.photos=state.photos.filter(p=>!set.has(p.id));
   if(layout&&(state.edited||state.locks.size)){layout.items=layout.items.filter(i=>!set.has(i.pid));rulerKey="";drawPreview()}
@@ -758,7 +828,7 @@ $("multiDel").onclick=()=>removePhotos([...state.msel]);
 $("cancelSel").onclick=()=>{state.sel=null;state.swap=false;state.pan=false;drawPreview()};
 $("undoBtn").onclick=()=>{const s=undo.pop();if(!s)return;const d=JSON.parse(s);
   const keep=new Map([...trash,...state.photos.map(p=>[p.id,p])]);
-  d.ph.forEach(([id,full,crop,fx])=>{const p=keep.get(id);if(p){p.full=full;p.crop=crop;p.fx=fx||undefined}});
+  d.ph.forEach(([id,full,crop,fx])=>{const p=keep.get(id);if(p){p.crop=crop;p.fx=fx||undefined}});
   d.order.forEach(id=>trash.delete(id));
   if(!layout)layout={...prm(),P:d.P,items:[],S:0};
   layout.items=d.items.filter(i=>keep.has(i.pid));layout.P=d.P;state.photos=d.order.filter(id=>keep.has(id)).map(id=>keep.get(id));

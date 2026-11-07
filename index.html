@@ -34,6 +34,10 @@ header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-be
 h1{font-family:var(--font-display);font-weight:700;font-size:clamp(24px,4vw,34px);letter-spacing:-.02em;margin:0;line-height:1;text-wrap:balance}
 .sub{color:var(--muted);font-size:13px;margin-top:6px;font-variant-numeric:tabular-nums}
 .actions{display:flex;flex-wrap:wrap;gap:8px}
+.ptitle{display:block;margin-top:10px;width:min(340px,100%);font:500 16px/1.3 var(--font-body);color:var(--ink);background:transparent;
+  border:0;border-bottom:1px dashed var(--line);padding:4px 0;border-radius:0}
+.ptitle::placeholder{color:var(--muted)}
+.ptitle:focus{outline:none;border-bottom:1px solid var(--accent)}
 button,.btn{font:inherit;font-weight:600;font-size:14px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);
   padding:10px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
 button:hover,.btn:hover{border-color:var(--muted)}
@@ -116,6 +120,7 @@ canvas#strip.grab{touch-action:none}
   <header>
     <div>
       <h1>Carrossel Contínuo</h1>
+      <input id="projTitle" class="ptitle" type="text" maxlength="60" placeholder="Título do projeto" aria-label="Título do projeto" autocomplete="off">
       <div class="sub" id="sub">Exemplo carregado · adicione suas fotos</div>
     </div>
     <div class="actions">
@@ -445,8 +450,9 @@ function frozenFrom(L){
   const keep=it=>{if(!ids.has(it.pid)&&byId(it.pid)){ids.add(it.pid);out.push({...it})}};
   [...state.locks].sort((a,b)=>a-b).forEach(k=>{
     const x0=k*pw,x1=x0+pw;
+    // tudo o que estiver na página travada fica: a foto de página inteira e as fotos colocadas por cima dela
     const full=L.items.find(it=>it.full&&Math.abs(it.x-x0)<1);
-    if(full){keep(full);return}
+    if(full)keep(full);
     L.items.forEach(it=>{if(it.x<x1-1&&it.x+it.w>x0+1&&!it.full)keep(it)});
   });
   const order=new Map(L.items.map((it,k)=>[it.pid,k]));
@@ -1107,7 +1113,7 @@ async function doExport(){
       for(let n=0;n<items.length;n++){const it=items[n],p=byId(it.pid);if(!p||!(it.x-pad<a+pw&&it.x+it.w+pad>a))continue;
         const v=await get(n);drawItem(ctx,it,p,v.src,a,fl[n],1,v.pre)}
       const blob=await new Promise(r=>page.toBlob(r,"image/jpeg",.93));
-      out.push({blob,url:URL.createObjectURL(blob),name:`carrossel-${String(k+1).padStart(2,"0")}.jpg`});
+      out.push({blob,url:URL.createObjectURL(blob),name:`${fileBase()}-${String(k+1).padStart(2,"0")}.jpg`});
       for(const [n,v] of cache){const it=items[n];if(it.x+it.w+pad<=a+pw){if(v.u)URL.revokeObjectURL(v.u);cache.delete(n)}}
     }
     exported.forEach(e=>URL.revokeObjectURL(e.url));exported=out;
@@ -1121,7 +1127,7 @@ function renderExport(){
   exported.forEach((e,k)=>{const d=document.createElement("div");d.className="pg";
     d.innerHTML=`<img alt="Página ${k+1}"><div class="meta"><span>${k+1}/${exported.length}</span><button>Salvar</button></div>`;
     d.querySelector("img").src=e.url;d.querySelector("button").onclick=()=>save(e.name,e.blob);box.appendChild(d)});
-  $("expTitle").textContent=`${exported.length} páginas prontas`;
+  $("expTitle").textContent=`${projTitle()?projTitle()+" · ":""}${exported.length} páginas prontas`;
   $("exportPanel").hidden=false;$("exportPanel").scrollIntoView({behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth",block:"start"});
 }
 const isMobile=/Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);
@@ -1138,24 +1144,33 @@ $("saveZip").onclick=async()=>{
   // no celular, compartilha todas as imagens de uma vez (dá para salvar direto na galeria)
   const imgs=exported.map(e=>asFile(e.name,e.blob));
   if(await shareFiles(imgs))return;
-  const z=await makeZip(exported);const d=new Date();
-  download(asFile(`carrossel-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}.zip`,z));
+  const z=await makeZip(exported,folderName());
+  download(asFile(`${folderName()}.zip`,z));
   toast("Download iniciado",1800);
 };
 /* ZIP simples (sem compressão) */
 const CRC=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
 function crc32(b){let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=CRC[(c^b[i])&255]^(c>>>8);return(c^0xFFFFFFFF)>>>0}
-async function makeZip(files){
+/* título do projeto: vira o nome da pasta (dentro do .zip e do próprio .zip) e o começo do nome de cada imagem */
+const projTitle=()=>($("projTitle").value||"").trim();
+const safeName=t=>t.replace(/[\\/:*?"<>|\u0000-\u001f]/g," ").replace(/\s+/g," ").replace(/^\.+/,"").trim().slice(0,60);
+const folderName=()=>safeName(projTitle())||"Carrossel";
+const fileBase=()=>{const t=safeName(projTitle());return t?t.replace(/ /g,"-"):"carrossel"};
+try{const t=localStorage.getItem("carrossel.titulo");if(t)$("projTitle").value=t}catch(_){}
+$("projTitle").addEventListener("input",()=>{try{localStorage.setItem("carrossel.titulo",$("projTitle").value)}catch(_){}});
+$("projTitle").addEventListener("keydown",e=>{if(e.key==="Enter")e.currentTarget.blur()});
+async function makeZip(files,folder){
   const enc=new TextEncoder(),parts=[],central=[];let off=0;
   const d=new Date(),dt=((d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1)),dd=(((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate());
   for(const f of files){
-    const data=new Uint8Array(await f.blob.arrayBuffer()),name=enc.encode(f.name),crc=crc32(data);
+    const data=new Uint8Array(await f.blob.arrayBuffer()),name=enc.encode((folder?folder+"/":"")+f.name),crc=crc32(data);
     const h=new DataView(new ArrayBuffer(30));
-    h.setUint32(0,0x04034b50,true);h.setUint16(4,20,true);h.setUint16(10,dt,true);h.setUint16(12,dd,true);
+    h.setUint32(0,0x04034b50,true);h.setUint16(4,20,true);h.setUint16(6,0x0800,true); // nomes em UTF-8 (acentos)
+    h.setUint16(10,dt,true);h.setUint16(12,dd,true);
     h.setUint32(14,crc,true);h.setUint32(18,data.length,true);h.setUint32(22,data.length,true);h.setUint16(26,name.length,true);
     parts.push(h.buffer,name,data);
     const c=new DataView(new ArrayBuffer(46));
-    c.setUint32(0,0x02014b50,true);c.setUint16(4,20,true);c.setUint16(6,20,true);c.setUint16(12,dt,true);c.setUint16(14,dd,true);
+    c.setUint32(0,0x02014b50,true);c.setUint16(4,20,true);c.setUint16(6,20,true);c.setUint16(8,0x0800,true);c.setUint16(12,dt,true);c.setUint16(14,dd,true);
     c.setUint32(16,crc,true);c.setUint32(20,data.length,true);c.setUint32(24,data.length,true);c.setUint16(28,name.length,true);c.setUint32(42,off,true);
     central.push(c.buffer,name);off+=30+name.length+data.length;
   }

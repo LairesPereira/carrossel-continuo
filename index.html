@@ -282,6 +282,7 @@ const LOCKMSG="Essa foto está numa página travada. Destrave o cadeado para edi
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const LOCK_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
 const TRASH_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>';
+const SHUF_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>';
 const UNLOCK_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>';
 
 function rngFrom(seed){let a=seed>>>0;return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
@@ -607,7 +608,10 @@ function buildRuler(){
     const del=document.createElement("button");del.className="lock pgdel";del.innerHTML=TRASH_SVG;
     del.title=on?"Destrave a página para limpar":"Excluir as fotos desta página";del.setAttribute("aria-label",`Excluir as fotos da página ${k+1}`);
     del.disabled=on;del.onclick=()=>clearPage(k);
-    const grp=document.createElement("span");grp.className="rbtns";grp.append(b,del);
+    const shf=document.createElement("button");shf.className="lock pgdel";shf.innerHTML=SHUF_SVG;
+    shf.title=on?"Destrave a página para embaralhar":"Embaralhar só esta página";shf.setAttribute("aria-label",`Embaralhar só a página ${k+1}`);
+    shf.disabled=on||fullPages.has(k);shf.onclick=()=>shufflePage(k);
+    const grp=document.createElement("span");grp.className="rbtns";grp.append(b,shf,del);
     d.appendChild(grp);ruler.appendChild(d);
   }
 }
@@ -888,6 +892,28 @@ $("swapBtn").onclick=()=>{state.swap=!state.swap;drawPreview()};
 $("frontBtn").onclick=()=>{snapshot();markEdited();const k=layout.items.findIndex(i=>i.pid===state.sel);layout.items.push(...layout.items.splice(k,1));drawPreview()};
 $("backBtn").onclick=()=>{snapshot();markEdited();const k=layout.items.findIndex(i=>i.pid===state.sel);
   const firstNonFull=layout.items.findIndex(i=>!i.full);const [m]=layout.items.splice(k,1);layout.items.splice(Math.max(0,firstNonFull),0,m);drawPreview()};
+// reorganiza só as fotos desta página (as de centro dentro dela), sem mexer nas vizinhas
+function shufflePage(k){
+  if(!layout||state.locks.has(k))return;const P_=prm(),pw=P_.pw,a=k*pw,b=a+pw;
+  const mine=layout.items.filter(it=>{const c=it.x+it.w/2;return c>=a&&c<b&&!it.full&&!isLocked(it.pid)});
+  if(!mine.length){toast("Não há fotos para embaralhar nessa página",2400);return}
+  const set=new Set(mine.map(i=>i.pid));
+  // espaço livre: a página, descontando fotos vizinhas que invadem as bordas
+  let x0=a,x1=b;
+  layout.items.forEach(it=>{if(set.has(it.pid))return;
+    if(it.x<x0+1&&it.x+it.w>x0)x0=Math.max(x0,it.x+it.w);
+    if(it.x+it.w>x1-1&&it.x<x1)x1=Math.min(x1,it.x)});
+  if(x1-x0<pw*.25){toast("As fotos vizinhas ocupam quase toda a página",2600);return}
+  const seed=Math.floor(Math.random()*1e9),rng=rngFrom(seed);
+  let photos=mine.map(i=>byId(i.pid)).filter(Boolean);
+  if(photos.length>1&&rng()<.6)for(let i=photos.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));[photos[i],photos[j]]=[photos[j],photos[i]]}
+  const cands=[];for(let t=0;t<8;t++){const r=place(plan(photos,rng,P_),x0,x1,P_);cands.push(r)}
+  cands.sort((p,q)=>q.S-p.S);const pick=cands[Math.floor(rng()*Math.min(3,cands.length))];
+  snapshot();markEdited();
+  const firstIdx=layout.items.findIndex(i=>set.has(i.pid));
+  layout.items=layout.items.filter(i=>!set.has(i.pid));layout.items.splice(Math.max(0,firstIdx),0,...pick.items);
+  state.sel=null;state.swap=false;state.pan=false;state.msel.clear();drawPreview();
+}
 // exclui as fotos cujo centro está na página; se a página ficar vazia, ela sai e as seguintes andam uma casa
 function clearPage(k){
   if(!layout||state.locks.has(k))return;const pw=layout.pw,x0=k*pw,x1=x0+pw;

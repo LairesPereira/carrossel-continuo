@@ -610,8 +610,18 @@ function drawPreview(){
   ctx.setLineDash([10/scale,8/scale]);ctx.lineWidth=1.5/scale;ctx.strokeStyle=css("--seam");
   for(let k=1;k<P;k++){ctx.beginPath();ctx.moveTo(k*pw,0);ctx.lineTo(k*pw,ph);ctx.stroke()}
   ctx.setLineDash([]);
-  if(guides.length){ctx.strokeStyle=css("--guide");ctx.lineWidth=1.5/scale;
-    for(const gd of guides){ctx.beginPath();if(gd.x!==undefined){ctx.moveTo(gd.x,0);ctx.lineTo(gd.x,ph)}else{ctx.moveTo(0,gd.y);ctx.lineTo(P*pw,gd.y)}ctx.stroke()}}
+  // réguas de centro enquanto arrasta: meio de cada página (vertical) e meio da altura (horizontal)
+  const gc=css("--guide");
+  if(drag&&drag.moved&&/move|resize/.test(drag.mode)){
+    ctx.save();ctx.globalAlpha=.45;ctx.strokeStyle=gc;ctx.lineWidth=1/scale;ctx.setLineDash([4/scale,6/scale]);
+    for(let k=0;k<P;k++){const x=k*pw+pw/2;if(x<viewX-pw||x>viewX+cv.width/dpr/scale+pw)continue;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,ph);ctx.stroke()}
+    ctx.beginPath();ctx.moveTo(viewX,ph/2);ctx.lineTo(viewX+cv.width/dpr/scale,ph/2);ctx.stroke();ctx.restore()}
+  if(guides.length){ctx.strokeStyle=gc;
+    for(const gd of guides){ctx.lineWidth=(gd.center?2.2:1.5)/scale;ctx.beginPath();
+      if(gd.x!==undefined){ctx.moveTo(gd.x,0);ctx.lineTo(gd.x,ph)}else{ctx.moveTo(viewX,gd.y);ctx.lineTo(viewX+cv.width/dpr/scale,gd.y)}ctx.stroke();
+      if(gd.center){const fs=11/scale,tx=gd.x!==undefined?gd.x+5/scale:viewX+8/scale,ty=gd.x!==undefined?14/scale:gd.y-6/scale;
+        ctx.font=`600 ${fs}px "Instrument Sans",sans-serif`;const tw=ctx.measureText("centro").width;
+        ctx.fillStyle=gc;ctx.fillRect(tx-3/scale,ty-fs,tw+6/scale,fs*1.35);ctx.fillStyle="#fff";ctx.fillText("centro",tx,ty)}}}
   const sel=selItem();
   if(sel){ctx.lineWidth=3/scale;ctx.strokeStyle=ac;
     if(panning()){ctx.setLineDash([6/scale,5/scale]);ctx.strokeRect(sel.x+1.5/scale,sel.y+1.5/scale,sel.w-3/scale,sel.h-3/scale);ctx.setLineDash([]);
@@ -800,7 +810,10 @@ cv.addEventListener("pointermove",e=>{
   const it=drag.it,L=layout,o=drag.orig;guides=[];
   if(drag.mode==="marquee"){drag.cur=pt}
   else if(drag.mode==="gmove"){
-    for(const [i,v] of drag.orig){i.x=v.x+dx;i.y=v.y+dy}
+    // o bloco inteiro encaixa no meio da página, nas divisas e nas outras fotos
+    let gx0=Infinity,gy0=Infinity,gx1=-Infinity,gy1=-Infinity;for(const v of drag.orig.values()){gx0=Math.min(gx0,v.x);gy0=Math.min(gy0,v.y);gx1=Math.max(gx1,v.x+v.w);gy1=Math.max(gy1,v.y+v.h)}
+    const [sx,sy]=snapBox(gx0+dx,gy0+dy,gx1-gx0,gy1-gy0,new Set(drag.orig.keys()));const ddx=sx-gx0,ddy=sy-gy0;
+    for(const [i,v] of drag.orig){i.x=v.x+ddx;i.y=v.y+ddy}
   }else if(drag.mode==="gresize"){
     // todas mudam de tamanho na mesma proporção, a partir do canto oposto do grupo
     const gb=drag.gb,sx=Math.abs(pt.x-drag.ax)/gb.w,sy=Math.abs(pt.y-drag.ay)/gb.h;
@@ -841,19 +854,27 @@ function zoomBy(f,quiet){
   p.crop.z=clamp(p.crop.z*f,1,5);const w=cropWin(it,p);
   p.crop.cx=clamp(p.crop.cx,w.sw/2,1-w.sw/2);p.crop.cy=clamp(p.crop.cy,w.sh/2,1-w.sh/2);requestDraw();
 }
-function snapTargets(it){
-  const L=layout,xs=[],ys=[L.mv,L.ph-L.mv,L.ph/2];
+// alvos de encaixe: divisas, meio de cada página, meio da altura, margens e bordas das outras fotos
+function snapTargets(skip){
+  const L=layout,xs=[],ys=[L.mv,L.ph-L.mv,L.ph/2],cx=new Set(),cy=new Set([L.ph/2]);
   for(let k=0;k<=L.P;k++)xs.push(k*L.pw);
-  for(const o of L.items){if(o===it)continue;xs.push(o.x,o.x+o.w);ys.push(o.y,o.y+o.h)}
-  return{xs,ys};
+  for(let k=0;k<L.P;k++){const c=k*L.pw+L.pw/2;xs.push(c);cx.add(c)}
+  const isSkip=o=>skip instanceof Set?skip.has(o):o===skip;
+  for(const o of L.items){if(isSkip(o))continue;xs.push(o.x,o.x+o.w);ys.push(o.y,o.y+o.h)}
+  return{xs,ys,cx,cy};
 }
-function snapMove(it,nx,ny){
-  const th=7/scale,{xs,ys}=snapTargets(it);let bx=null,by=null;
-  for(const off of [0,it.w/2,it.w])for(const t of xs){const d=t-(nx+off);if(Math.abs(d)<th&&(bx===null||Math.abs(d)<Math.abs(bx.d)))bx={d,t}}
-  for(const off of [0,it.h/2,it.h])for(const t of ys){const d=t-(ny+off);if(Math.abs(d)<th&&(by===null||Math.abs(d)<Math.abs(by.d)))by={d,t}}
-  if(bx){nx+=bx.d;guides.push({x:bx.t})}if(by){ny+=by.d;guides.push({y:by.t})}
-  return[nx,ny];
+// encaixa uma caixa (foto ou bloco) pelos lados ou pelo centro; o centro tem prioridade quando empata
+function snapBox(x,y,w,h,skip){
+  const th=7/scale,{xs,ys,cx,cy}=snapTargets(skip);let bx=null,by=null;
+  // o encaixe no centro da página "pesa" metade: ganha das bordas, a não ser que uma borda esteja bem mais perto
+  const pick=(cur,d,t,isC)=>{const sc=Math.abs(d)*(isC?.5:1);return(cur===null||sc<cur.sc)?{d,t,c:isC,sc}:cur};
+  for(const off of [0,w/2,w])for(const t of xs){const d=t-(x+off);if(Math.abs(d)<th*1.3)bx=pick(bx,d,t,cx.has(t)&&off===w/2)}
+  for(const off of [0,h/2,h])for(const t of ys){const d=t-(y+off);if(Math.abs(d)<th*1.3)by=pick(by,d,t,cy.has(t)&&off===h/2)}
+  if(bx&&!bx.c&&Math.abs(bx.d)>=th)bx=null;if(by&&!by.c&&Math.abs(by.d)>=th)by=null;
+  if(bx){x+=bx.d;guides.push({x:bx.t,center:bx.c})}if(by){y+=by.d;guides.push({y:by.t,center:by.c})}
+  return[x,y];
 }
+function snapMove(it,nx,ny){return snapBox(nx,ny,it.w,it.h,it)}
 function snapResize(dr,w,ar,sx,sy){
   const th=7/scale,{xs,ys}=snapTargets(dr.it);let best=null;
   const edgeX=dr.ax+sx*w,edgeY=dr.ay+sy*w/ar;

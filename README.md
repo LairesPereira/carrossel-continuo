@@ -9,6 +9,7 @@ Roda inteiro no navegador: sem login, sem banco de dados, as fotos nunca saem do
 - Linhas de corte e numeração mostram onde cada post termina.
 - Formatos 3:4 (1080×1440), 4:5 (1080×1350) e 1:1 (1080×1080).
 - Sobreposição de fotos, contorno e sombra opcionais.
+- Réguas de centro ao arrastar (meio de cada página e meio da altura), com encaixe para fotos e blocos de fotos.
 - Arrastar, redimensionar, girar 90°, trocar de lugar, trazer à frente/enviar para trás.
 - Páginas inteiras automáticas (0%, 20%, 40% ou 60% das fotos; padrão 40%), com enquadramento e zoom ajustáveis.
 - Botão para sortear mais uma foto como página inteira.

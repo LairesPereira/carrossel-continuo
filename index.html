@@ -59,7 +59,8 @@ svg.i{width:16px;height:16px;flex:none}
 .sw[aria-pressed="true"]{outline:2px solid var(--accent);outline-offset:2px}
 
 .stage{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 0 10px}
-.scroller{overflow-x:auto;padding:0 14px 8px;-webkit-overflow-scrolling:touch}
+.scroller{overflow-x:auto;padding:0 14px 8px;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
+#track{position:relative}
 .ruler{display:flex;margin-bottom:6px}
 .ruler div{flex:none;font-family:var(--font-mono);font-size:11px;color:var(--muted);border-left:1px dashed var(--seam);padding:0 6px;font-variant-numeric:tabular-nums}
 .ruler div:first-child{border-left-color:transparent}
@@ -80,7 +81,7 @@ svg.i{width:16px;height:16px;flex:none}
 #multiBtn[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .zoom{display:inline-flex;align-items:center;gap:4px}
 .zoom button{padding:6px 10px}
-canvas#strip{display:block;max-width:none;box-shadow:0 0 0 1px var(--line);touch-action:pan-x pan-y;user-select:none;-webkit-user-select:none}
+canvas#strip{display:block;max-width:none;position:sticky;left:0;box-shadow:0 0 0 1px var(--line);touch-action:pan-x pan-y;user-select:none;-webkit-user-select:none}
 canvas#strip.grab{touch-action:none}
 .hint{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;padding:8px 14px 0;color:var(--muted);font-size:13px}
 .hint b{color:var(--ink);font-weight:600}
@@ -184,7 +185,7 @@ canvas#strip.grab{touch-action:none}
   <div class="stage">
     <div class="scroller" id="scroller">
       <div class="ruler" id="ruler"></div>
-      <canvas id="strip"></canvas>
+      <div id="track"><canvas id="strip"></canvas></div>
     </div>
     <div class="hint">
       <span class="left">
@@ -259,11 +260,12 @@ canvas#strip.grab{touch-action:none}
 <div class="toast" id="toast" hidden></div>
 
 <script>
+const MAXP=20; // o Instagram aceita até 20 imagens por carrossel
 const FORMATS={"3:4":[1080,1440],"4:5":[1080,1350],"1:1":[1080,1080]};
 const state={photos:[],seed:20261107,format:"3:4",auto:true,pages:3,spacing:1,overlap:0,frame:true,shadow:false,
   bg:"#FFFFFF",sel:null,swap:false,pan:false,sample:true,edited:false,fullPct:40,locks:new Set(),lockMembers:new Map(),multi:false,msel:new Set()};
 const trash=new Map();
-let layout=null, scale=1, dpr=1, exported=[], uid=0, undo=[], guides=[], rulerKey="";
+let layout=null, scale=1, dpr=1, viewX=0, exported=[], uid=0, undo=[], guides=[], rulerKey="";
 const $=id=>document.getElementById(id);
 const byId=id=>state.photos.find(p=>p.id===id);
 /* fotos que estavam na página quando ela foi travada ficam protegidas */
@@ -381,10 +383,10 @@ function layoutRun(photos,F,a,b,x0,x1,rng,P_){
 function layoutFresh(rng,prefer){
   const P_=prm(),photos=state.photos,F=pickFulls(photos,fullTarget(photos.length),rng,P_,prefer);
   const {chunks,fulls}=splitChunks(photos,F);
-  let P;
-  if(state.auto){P=fulls.length;chunks.forEach(c=>{P+=autoPages(plan(c,rngFrom(7),P_),0,P_)})}
+  let P;const need=()=>{const {chunks,fulls}=splitChunks(photos,F);let n=fulls.length;chunks.forEach(c=>{n+=autoPages(plan(c,rngFrom(7),P_),0,P_)});return n};
+  if(state.auto){P=need();while(P>MAXP&&F.size){F.delete([...F].pop());P=need()}}
   else P=Math.max(state.pages,fulls.length+chunks.filter(c=>c.length).length);
-  P=Math.max(1,P);
+  P=Math.max(1,Math.min(MAXP,P));
   const r=layoutRun(photos,F,0,P,0,P*P_.pw,rng,P_);
   return{P,pw:P_.pw,ph:P_.ph,mv:P_.mv,Hu:P_.Hu,items:[...r.fullItems,...r.items],S:r.minS};
 }
@@ -417,7 +419,7 @@ function layoutLocked(rng,prev,prefer){
   // páginas inteiras criadas por você (Preencher/Sortear) são extras; as automáticas travadas contam nos 40%
   const autoFrozen=frozen.filter(it=>it.full&&!it.user).length;
   const F=pickFulls(free,Math.max(0,Math.min(fullTarget(state.photos.length)-autoFrozen,free.length>=3?free.length-2:free.length-1)),rng,P_,prefer);
-  const dem=p=>F.has(p.id)?1:.8,totDem=free.reduce((t,p)=>t+dem(p),0);
+  const dem=p=>F.has(p.id)?1:.8,cum=[0];free.forEach(p=>cum.push(cum[cum.length-1]+dem(p)));const totDem=cum[cum.length-1];
   const Pmin=Math.max(1,...[...state.locks].map(k=>k+1));
   let P=state.auto?Pmin:Math.max(Pmin,prev.P),res=null;
   for(let guard=0;guard<60;guard++){
@@ -426,12 +428,12 @@ function layoutLocked(rng,prev,prefer){
     // reparte as fotos entre os trechos livres pela "demanda" de páginas (página inteira = 1 página)
     const tot=runs.reduce((s,r)=>s+r.x1-r.x0,0);let acc=0,start=0,items=[],fullItems=[],minS=P_.Hu;
     runs.forEach((r,i)=>{acc+=r.x1-r.x0;let end=start,d=0;const goal=totDem*acc/tot;
-      if(i===runs.length-1)end=free.length;else while(end<free.length&&d+dem(free[end])/2<=goal-(free.slice(0,start).reduce((t,p)=>t+dem(p),0))){d+=dem(free[end]);end++}
+      if(i===runs.length-1)end=free.length;else while(end<free.length&&cum[end]+dem(free[end])/2<=goal)end++;
       const chunk=free.slice(start,end);start=end;if(!chunk.length)return;
       const out=layoutRun(chunk,F,r.a,r.b,r.x0,r.x1,rng,P_);items.push(...out.items);fullItems.push(...out.fullItems);minS=Math.min(minS,out.minS)});
     res={P,items,fullItems,minS};
     const wanted=F.size,got=fullItems.length;
-    if(state.auto&&free.length&&(minS<.72*P_.Hu||got<wanted)&&P<40){P++;continue}
+    if(state.auto&&free.length&&(minS<.72*P_.Hu||got<wanted)&&P<MAXP){P++;continue}
     break;
   }
   const fullFirst=frozen.filter(it=>it.full),rest=frozen.filter(it=>!it.full);
@@ -458,13 +460,14 @@ function computeLayout(keepFull){
   if(!locked)clearLocks();
   const prefer=keepFull&&prev?new Set(prev.items.filter(i=>i.full).map(i=>i.pid)):null;
   let best=null,bs=Infinity;
-  for(let k=0;k<16;k++){const rng=rngFrom(state.seed*31+k*977);const L=locked?layoutLocked(rng,prev,prefer):layoutFresh(rng,prefer);const s=score(L);if(s<bs){bs=s;best=L}}
+  const tries=state.photos.length>30?8:16;
+  for(let k=0;k<tries;k++){const rng=rngFrom(state.seed*31+k*977);const L=locked?layoutLocked(rng,prev,prefer):layoutFresh(rng,prefer);const s=score(L);if(s<bs){bs=s;best=L}}
   layout=best;
 }
 
 /* ---------- drawing ---------- */
 const inter=(a,b)=>a.x<b.x+b.w&&b.x<a.x+a.w&&a.y<b.y+b.h&&b.y<a.y+a.h;
-function overlapFlags(items){return items.map((it,k)=>!it.full&&items.slice(0,k).some(o=>inter(o,it)))}
+function overlapFlags(items){const out=new Array(items.length);for(let k=0;k<items.length;k++){const it=items[k];let f=false;if(!it.full)for(let j=0;j<k;j++)if(inter(items[j],it)){f=true;break}out[k]=f}return out}
 function cropWin(it,p){
   const B=it.w/it.h,A=p.ar,c=p.crop||{cx:.5,cy:.5,z:1};
   let sw,sh;if(A>B){sh=1;sw=B/A}else{sw=1;sh=A/B}
@@ -539,13 +542,18 @@ function drawPreview(){
   const {P,pw,ph}=layout;
   const H=Math.max(240,Math.min(560,window.innerHeight*.52));
   scale=H/ph;dpr=Math.min(window.devicePixelRatio||1,2);
-  const W=P*pw*scale,cw=Math.round(W*dpr),chh=Math.round(H*dpr);
-  if(cv.width!==cw||cv.height!==chh){cv.width=cw;cv.height=chh;cv.style.width=W+"px";cv.style.height=H+"px"}
-  ctx.setTransform(dpr*scale,0,0,dpr*scale,0,0);
-  ctx.fillStyle=state.bg;ctx.fillRect(0,0,P*pw,ph);
+  const W=P*pw*scale,track=$("track"),sc=$("scroller");
+  if(track.style.width!==W+"px")track.style.width=W+"px";
+  const scs=getComputedStyle(sc),inner=sc.clientWidth-parseFloat(scs.paddingLeft)-parseFloat(scs.paddingRight);
+  const visW=Math.max(50,Math.min(W,inner)),cw=Math.round(visW*dpr),chh=Math.round(H*dpr);
+  if(cv.width!==cw||cv.height!==chh){cv.width=cw;cv.height=chh;cv.style.width=visW+"px";cv.style.height=H+"px"}
+  viewX=Math.max(0,cv.getBoundingClientRect().left-track.getBoundingClientRect().left)/scale;
+  const vx0=viewX-pw*.06,vx1=viewX+visW/scale+pw*.06;
+  ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle=state.bg;ctx.fillRect(0,0,cw,chh);
+  ctx.setTransform(dpr*scale,0,0,dpr*scale,-viewX*dpr*scale,0);
   ctx.imageSmoothingQuality="high";
   const fl=overlapFlags(layout.items);
-  layout.items.forEach((it,k)=>{const p=byId(it.pid);if(p)drawItem(ctx,it,p,fxSrc(p),0,fl[k],dpr*scale)});
+  layout.items.forEach((it,k)=>{if(it.x>vx1||it.x+it.w<vx0)return;const p=byId(it.pid);if(p)drawItem(ctx,it,p,fxSrc(p),0,fl[k],dpr*scale)});
   // páginas travadas
   const ac=css("--accent");
   state.locks.forEach(k=>{if(k<P){ctx.fillStyle=ac;ctx.fillRect(k*pw,0,pw,5/scale)}});
@@ -591,7 +599,7 @@ function buildRuler(){
 const corners=it=>[[it.x,it.y],[it.x+it.w,it.y],[it.x+it.w,it.y+it.h],[it.x,it.y+it.h]];
 function updateMeta(){
   const n=state.photos.length,P=layout?layout.P:0,sel=selItem(),sp=sel&&byId(sel.pid);
-  $("sub").textContent=state.sample?`Exemplo com ${n} fotos · adicione as suas`:`${n} foto${n!==1?"s":""} · ${P} página${P!==1?"s":""} · ${FORMATS[state.format].join("×")} px`;
+  $("sub").textContent=state.sample?`Exemplo com ${n} fotos · adicione as suas`:`${n} foto${n!==1?"s":""} · ${P} página${P!==1?"s":""}${P>=MAXP?" (máximo do Instagram)":""} · ${FORMATS[state.format].join("×")} px`;
   $("pNum").textContent=layout?layout.P:state.pages;
   $("pAuto").setAttribute("aria-pressed",state.auto);
   $("selbar").hidden=!state.sel;
@@ -626,20 +634,30 @@ function markEdited(){state.edited=true}
 /* ---------- photos ---------- */
 function loadImg(file){return new Promise((res,rej)=>{const u=URL.createObjectURL(file),im=new Image();
   im.onload=()=>res({im,u});im.onerror=()=>{URL.revokeObjectURL(u);rej(new Error("decode"))};im.src=u})}
+async function makeThumb(f){
+  // caminho rápido: o navegador decodifica já reduzido e fora da tela principal (respeitando a rotação da foto)
+  if(window.createImageBitmap){try{
+    const bm=await createImageBitmap(f,{resizeHeight:1100,resizeQuality:"high",imageOrientation:"from-image"});
+    if(bm.height===1100)return{id:++uid,name:f.name,ar:bm.width/bm.height,thumb:bm,file:f};
+    bm.close&&bm.close()}catch(_){}}
+  const {im,u}=await loadImg(f);try{if(im.decode)await im.decode()}catch(_){}
+  const w=im.naturalWidth,h=im.naturalHeight,sc=Math.min(1,1100/Math.max(w,h));
+  const c=document.createElement("canvas");c.width=Math.round(w*sc);c.height=Math.round(h*sc);
+  const x=c.getContext("2d");x.imageSmoothingQuality="high";x.drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);
+  return{id:++uid,name:f.name,ar:w/h,thumb:c,file:f};
+}
 async function addFiles(files){
   files=[...files].filter(f=>f.type.startsWith("image/")||/\.(jpe?g|png|webp|heic|heif|avif)$/i.test(f.name));
   if(!files.length)return;
   if(state.sample){state.photos=[];state.sample=false;state.sel=null;clearLocks();state.multi=false;state.msel.clear();layout=null}
-  let fails=0;toast(`Carregando ${files.length} foto${files.length>1?"s":""}…`,0);
-  for(const f of files){
-    try{const {im,u}=await loadImg(f);const w=im.naturalWidth,h=im.naturalHeight,s=Math.min(1,1400/Math.max(w,h));
-      const c=document.createElement("canvas");c.width=Math.round(w*s);c.height=Math.round(h*s);
-      const x=c.getContext("2d");x.imageSmoothingQuality="high";x.drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);
-      state.photos.push({id:++uid,name:f.name,ar:w/h,thumb:c,file:f})}
-    catch(e){fails++}
-  }
+  let fails=0,done=0;const out=new Array(files.length);toast(`Carregando 0/${files.length}…`,0);
+  let next=0;const worker=async()=>{while(next<files.length){const i=next++;
+    try{out[i]=await makeThumb(files[i])}catch(e){fails++}done++;toast(`Carregando ${done}/${files.length}…`,0)}};
+  await Promise.all([worker(),worker(),worker()]);
+  out.forEach(p=>{if(p)state.photos.push(p)});
   hideToast();
   if(fails)toast(`${fails} arquivo${fails>1?"s":""} não abriu. Fotos HEIC só abrem no Safari; exporte como JPG.`);
+  else if(state.photos.length>MAXP*1.6)toast(`O Instagram aceita até ${MAXP} páginas por post. Com ${state.photos.length} fotos, considere dividir em dois posts.`,5000);
   state.seed=Math.floor(Math.random()*1e9);state.auto=true;undo=[];refresh();
 }
 function makeSamples(){
@@ -657,7 +675,10 @@ function makeSamples(){
 
 /* ---------- direct manipulation ---------- */
 const cv=$("strip");let drag=null;
-function toStrip(e){const r=cv.getBoundingClientRect();return{x:(e.clientX-r.left)/scale,y:(e.clientY-r.top)/scale}}
+function toStrip(e){const r=cv.getBoundingClientRect(),t=$("track").getBoundingClientRect();return{x:(e.clientX-t.left)/scale,y:(e.clientY-r.top)/scale}}
+$("scroller").addEventListener("scroll",()=>requestDraw(),{passive:true});
+// ao arrastar perto da borda, a fita rola sozinha
+function edgeScroll(e){const r=cv.getBoundingClientRect(),sc=$("scroller");if(e.clientX<r.left+36)sc.scrollLeft-=14;else if(e.clientX>r.right-36)sc.scrollLeft+=14}
 // procura a foto mais à frente que não esteja travada; fotos travadas só respondem com um aviso
 function hitItem(pt,any){let lk=null;for(let k=layout.items.length-1;k>=0;k--){const t=layout.items[k];
   if(pt.x>=t.x&&pt.x<=t.x+t.w&&pt.y>=t.y&&pt.y<=t.y+t.h){if(!isLocked(t.pid))return t;lk=lk||t}}return any?lk:null}
@@ -689,7 +710,7 @@ cv.addEventListener("pointermove",e=>{
   if(!drag||e.pointerId!==drag.id)return;const pt=toStrip(e);
   const dx=pt.x-drag.start.x,dy=pt.y-drag.start.y;
   if(!drag.moved){if(Math.hypot(dx,dy)*scale<4)return;drag.moved=true;snapshot();markEdited()}
-  e.preventDefault();
+  e.preventDefault();if(drag.mode!=="pan")edgeScroll(e);
   const it=drag.it,L=layout,o=drag.orig;guides=[];
   if(drag.mode==="pan"){
     const W=drag.win;drag.p.crop.cx=clamp(o.cx-dx/it.w*W.sw,W.sw/2,1-W.sw/2);drag.p.crop.cy=clamp(o.cy-dy/it.h*W.sh,W.sh/2,1-W.sh/2);
@@ -778,7 +799,7 @@ $("clearAll").onclick=()=>{state.photos=[];state.sample=false;state.sel=null;cle
 $("pAuto").onclick=()=>{state.auto=!state.auto;if(!state.auto&&layout)state.pages=layout.P;refresh()};
 function setPages(n){
   const minP=Math.max(1,...[...state.locks].map(k=>k+1));
-  n=clamp(n,minP,20);
+  n=clamp(n,minP,MAXP);
   if(state.edited){snapshot();layout.P=n;state.pages=n;rulerKey="";drawPreview();return}
   state.pages=n;state.auto=false;if(layout)layout.P=n;refresh();
 }
@@ -881,24 +902,31 @@ $("fxReset").onclick=()=>{snapshot();fxTargets().forEach(p=>{p.fx=undefined});re
 /* ---------- export ---------- */
 async function doExport(){
   if(!layout)return;const btn=$("exportBtn");btn.disabled=true;
-  const {P,pw,ph,items}=layout,fl=overlapFlags(items);
-  const cvs=[...Array(P)].map(()=>{const c=document.createElement("canvas");c.width=pw;c.height=ph;const x=c.getContext("2d");x.fillStyle=state.bg;x.fillRect(0,0,pw,ph);x.imageSmoothingQuality="high";return c});
+  const {P,pw,ph,items}=layout,fl=overlapFlags(items),pad=pw*.06;
+  const page=document.createElement("canvas");page.width=pw;page.height=ph;const ctx=page.getContext("2d");
+  const cache=new Map(); // fotos em alta resolução só enquanto aparecem na página atual ou na próxima
+  const get=async n=>{if(cache.has(n))return cache.get(n);const it=items[n],p=byId(it.pid);let src=p.thumb,u=null;
+    if(p.file){try{const r=await loadImg(p.file);src=r.im;u=r.u}catch(e){}}
+    let pre=null;
+    if(hasFx(p.fx)){const iw=src.naturalWidth||src.width,ih=src.naturalHeight||src.height,c=cropWin(it,p),k=it.w/(c.sw*iw);
+      pre=processImage(src,c.sx*iw,c.sy*ih,c.sw*iw,c.sh*ih,it.w,it.h,p.fx,Math.min(iw,ih)*k)}
+    const v={src:pre||src,pre:!!pre,u};cache.set(n,v);return v};
+  const out=[];
   try{
-    for(let n=0;n<items.length;n++){
-      toast(`Gerando em alta resolução… ${n+1}/${items.length}`,0);
-      const it=items[n],p=byId(it.pid);if(!p)continue;let src=p.thumb,u=null;
-      if(p.file){try{const r=await loadImg(p.file);src=r.im;u=r.u}catch(e){}}
-      const pad=pw*.06;let pre=null;
-      if(hasFx(p.fx)){const iw=src.naturalWidth||src.width,ih=src.naturalHeight||src.height,c=cropWin(it,p),k=it.w/(c.sw*iw);
-        pre=processImage(src,c.sx*iw,c.sy*ih,c.sw*iw,c.sh*ih,it.w,it.h,p.fx,Math.min(iw,ih)*k)}
-      for(let k=0;k<P;k++){const a=k*pw;if(it.x-pad<a+pw&&it.x+it.w+pad>a)drawItem(cvs[k].getContext("2d"),it,p,pre||src,a,fl[n],1,!!pre)}
-      if(u)URL.revokeObjectURL(u);
+    for(let k=0;k<P;k++){
+      toast(`Gerando página ${k+1} de ${P} em alta resolução…`,0);
+      const a=k*pw;ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation="source-over";
+      ctx.fillStyle=state.bg;ctx.fillRect(0,0,pw,ph);ctx.imageSmoothingQuality="high";
+      for(let n=0;n<items.length;n++){const it=items[n],p=byId(it.pid);if(!p||!(it.x-pad<a+pw&&it.x+it.w+pad>a))continue;
+        const v=await get(n);drawItem(ctx,it,p,v.src,a,fl[n],1,v.pre)}
+      const blob=await new Promise(r=>page.toBlob(r,"image/jpeg",.93));
+      out.push({blob,url:URL.createObjectURL(blob),name:`carrossel-${String(k+1).padStart(2,"0")}.jpg`});
+      for(const [n,v] of cache){const it=items[n];if(it.x+it.w+pad<=a+pw){if(v.u)URL.revokeObjectURL(v.u);cache.delete(n)}}
     }
-    exported.forEach(e=>URL.revokeObjectURL(e.url));exported=[];
-    for(let k=0;k<P;k++){const blob=await new Promise(r=>cvs[k].toBlob(r,"image/jpeg",.93));
-      exported.push({blob,url:URL.createObjectURL(blob),name:`carrossel-${String(k+1).padStart(2,"0")}.jpg`})}
+    exported.forEach(e=>URL.revokeObjectURL(e.url));exported=out;
     renderExport();hideToast();
   }catch(e){toast("Não consegui gerar as páginas. Tente com menos fotos de uma vez.")}
+  for(const v of cache.values())if(v.u)URL.revokeObjectURL(v.u);
   btn.disabled=false;
 }
 function renderExport(){

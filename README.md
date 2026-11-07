@@ -10,7 +10,9 @@ Roda inteiro no navegador: sem login, sem banco de dados, as fotos nunca saem do
 - Sobreposição de fotos, contorno e sombra opcionais.
 - Arrastar, redimensionar, trocar de lugar, trazer à frente/enviar para trás.
 - Foto ocupando a página inteira, com enquadramento e zoom ajustáveis.
-- Cadeado por página: páginas travadas não mudam ao reembaralhar.
+- Cadeado por página: páginas travadas não mudam ao reembaralhar; as fotos que já estavam nelas ficam protegidas, mas outras fotos podem entrar por cima ou por baixo.
+- Efeitos por foto: granulação, desfoque, desfoque de movimento com direção, preto e branco com intensidade.
+- Seleção de várias fotos para excluir ou aplicar efeitos de uma vez (com Desfazer).
 - Exporta cada página em JPG na resolução final (no celular, abre o compartilhamento para salvar na galeria; no computador, baixa um .zip).
 
 ## Rodar localmente

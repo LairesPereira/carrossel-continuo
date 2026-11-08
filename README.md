@@ -7,7 +7,8 @@ Roda inteiro no navegador: sem login, sem banco de dados, as fotos nunca saem do
 - Recebe várias fotos e monta a colagem automaticamente; **Reembaralhar** gera novas composições.
 - Dois estilos de colagem: **Livre** (espalhada, sem simetria, fotos passando pelas divisas) e **Simétrico** (modelos prontos: todas as fotos da página do mesmo tamanho, alinhadas e centralizadas).
 - Linhas de corte e numeração mostram onde cada post termina.
-- Formatos 3:4 (1080×1440), 4:5 (1080×1350) e 1:1 (1080×1080).
+- Formatos 4:5 (1080×1350, padrão), 3:4 (1080×1440) e 1:1 (1080×1080).
+- Exportação em qualidade máxima: JPEG 100%, fotos reduzidas em etapas direto do arquivo original e coladas pixel a pixel; opção de 2160 px (2×).
 - Sobreposição de fotos, contorno e sombra opcionais.
 - Réguas de centro ao arrastar (meio de cada página e meio da altura), com encaixe para fotos e blocos de fotos.
 - Arrastar, redimensionar, girar 90°, trocar de lugar, trazer à frente/enviar para trás.

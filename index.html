@@ -143,8 +143,8 @@ canvas#strip.grab{touch-action:none}
   <div class="controls">
     <div class="ctl"><span class="lab">Formato</span>
       <div class="seg" id="fmt">
-        <button data-v="3:4" aria-pressed="true">3:4</button>
-        <button data-v="4:5" aria-pressed="false">4:5</button>
+        <button data-v="3:4" aria-pressed="false">3:4</button>
+        <button data-v="4:5" aria-pressed="true">4:5</button>
         <button data-v="1:1" aria-pressed="false">1:1</button>
       </div>
     </div>
@@ -184,6 +184,12 @@ canvas#strip.grab{touch-action:none}
       </div>
       <button class="tog" id="frameTog" aria-pressed="true">Contorno</button>
       <button class="tog" id="shadowTog" aria-pressed="false">Sombra</button>
+    </div>
+    <div class="ctl"><span class="lab">Exportar em</span>
+      <div class="seg" id="expSeg">
+        <button data-v="1" aria-pressed="true">1080 px</button>
+        <button data-v="2" aria-pressed="false">2160 px</button>
+      </div>
     </div>
     <div class="ctl"><span class="lab">Fundo</span>
       <button class="sw" data-bg="#FFFFFF" style="background:#FFFFFF" aria-label="Branco" aria-pressed="true"></button>
@@ -279,7 +285,7 @@ canvas#strip.grab{touch-action:none}
 <script>
 const MAXP=20; // o Instagram aceita até 20 imagens por carrossel
 const FORMATS={"3:4":[1080,1440],"4:5":[1080,1350],"1:1":[1080,1080]};
-const state={photos:[],seed:20261107,format:"3:4",auto:true,pages:3,spacing:1,overlap:0,frame:true,shadow:false,
+const state={photos:[],seed:20261107,format:"4:5",auto:true,expScale:1,pages:3,spacing:1,overlap:0,frame:true,shadow:false,
   bg:"#FFFFFF",sel:null,swap:false,pan:false,sample:true,edited:false,fullPct:40,style:"free",locks:new Set(),lockMembers:new Map(),multi:false,msel:new Set()};
 const trash=new Map();
 let layout=null, scale=1, dpr=1, viewX=0, exported=[], uid=0, undo=[], guides=[], rulerKey="";
@@ -535,7 +541,8 @@ function drawItem(ctx,it,p,src,ox,overl,pxScale,pre){
     ctx.shadowBlur=pw*.022*pxScale;ctx.shadowOffsetY=pw*.006*pxScale;ctx.fillStyle=state.bg;
     const f=state.frame&&overl?fw:0;ctx.fillRect(x-f,y-f,w+2*f,h+2*f);ctx.restore()}
   if(state.frame&&overl){ctx.fillStyle=state.bg;ctx.fillRect(x-fw,y-fw,w+2*fw,h+2*fw)}
-  if(pre)ctx.drawImage(src,x,y,w,h);
+  if(pre){const m=ctx.getTransform(),dx=Math.round(m.a*x+m.e),dy=Math.round(m.d*y+m.f);
+    ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.drawImage(src,dx,dy);ctx.restore()}
   else{const iw=src.naturalWidth||src.width,ih=src.naturalHeight||src.height,c=cropWin(it,p);
     ctx.drawImage(src,c.sx*iw,c.sy*ih,c.sw*iw,c.sh*ih,x,y,w,h)}
   const gr=p.fx?.grain||0;
@@ -572,9 +579,16 @@ function motionBlur(c,L,angle){
   while(d>=.75){const n=mk(W,H),x=n.getContext("2d");x.drawImage(cur,-dx*d/2,-dy*d/2);x.globalAlpha=.5;x.drawImage(cur,dx*d/2,dy*d/2);cur=n;d/=2}
   const o=mk(W,H),x=o.getContext("2d");x.drawImage(c,0,0);x.drawImage(cur,0,0);return o;
 }
+// reduz em etapas de 50% até chegar perto do tamanho final: bem mais nítido que reduzir de uma vez
+function hqResize(src,sx,sy,sw,sh,W,H){
+  let cur=src,cx=sx,cy=sy,cw=sw,ch=sh;
+  while(cw>W*2&&ch>H*2){const nw=Math.max(W,Math.round(cw/2)),nh=Math.max(H,Math.round(ch/2));
+    const c=mk(nw,nh),x=c.getContext("2d");x.imageSmoothingEnabled=true;x.imageSmoothingQuality="high";x.drawImage(cur,cx,cy,cw,ch,0,0,nw,nh);cur=c;cx=0;cy=0;cw=nw;ch=nh}
+  const o=mk(W,H),x=o.getContext("2d");x.imageSmoothingEnabled=true;x.imageSmoothingQuality="high";x.drawImage(cur,cx,cy,cw,ch,0,0,W,H);return o;
+}
 function processImage(src,sx,sy,sw,sh,W,H,fx,base){
-  W=Math.max(1,Math.round(W));H=Math.max(1,Math.round(H));
-  let c=mk(W,H),x=c.getContext("2d");x.imageSmoothingQuality="high";x.drawImage(src,sx,sy,sw,sh,0,0,W,H);
+  W=Math.max(1,Math.round(W));H=Math.max(1,Math.round(H));fx=fx||{};
+  let c=hqResize(src,sx,sy,sw,sh,W,H),x=c.getContext("2d");
   if(fx.gauss>0)c=gaussBlur(c,fx.gauss/100*.025*base);
   if(fx.motion>0)c=motionBlur(c,fx.motion/100*.08*base,fx.angle);
   if(fx.bw&&fx.bwAmt>0){x=c.getContext("2d");const d=x.getImageData(0,0,c.width,c.height),a=d.data,t=fx.bwAmt/100;
@@ -941,6 +955,7 @@ function segBind(id,key,conv,onChange){$(id).querySelectorAll("button").forEach(
   onChange&&onChange();if(state.edited)state.auto=true;undo=[];refresh()})}
 segBind("fmt","format",v=>v,()=>{clearLocks();state.photos.forEach(p=>{p.crop=null});layout=null;state.sel=null});
 segBind("spc","spacing",v=>+v);segBind("fullSeg","fullPct",v=>+v);segBind("styleSeg","style",v=>v);
+$("expSeg").querySelectorAll("button").forEach(b=>b.onclick=()=>{$("expSeg").querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",x===b));state.expScale=+b.dataset.v});
 // sorteia uma foto da colagem e transforma em página inteira (a página fica travada)
 $("randFull").onclick=()=>{
   if(!layout)return;const pw=layout.pw,clampP=x=>clamp(Math.floor(x/pw),0,layout.P-1);
@@ -1095,24 +1110,25 @@ $("fxReset").onclick=()=>{snapshot();fxTargets().forEach(p=>{p.fx=undefined});re
 /* ---------- export ---------- */
 async function doExport(){
   if(!layout)return;const btn=$("exportBtn");btn.disabled=true;
-  const {P,pw,ph,items}=layout,fl=overlapFlags(items),pad=pw*.06;
-  const page=document.createElement("canvas");page.width=pw;page.height=ph;const ctx=page.getContext("2d");
+  const {P,pw,ph,items}=layout,fl=overlapFlags(items),pad=pw*.06,S=state.expScale||1;
+  const page=document.createElement("canvas");page.width=pw*S;page.height=ph*S;const ctx=page.getContext("2d");
   const cache=new Map(); // fotos em alta resolução só enquanto aparecem na página atual ou na próxima
   const get=async n=>{if(cache.has(n))return cache.get(n);const it=items[n],p=byId(it.pid);let src=p.thumb,u=null;
     if(p.file){try{const r=await loadImg(p.file);src=r.im;u=r.u;if(p.rot){src=rotCanvas(src,p.rot);URL.revokeObjectURL(u);u=null}}catch(e){}}
-    let pre=null;
-    if(hasFx(p.fx)){const iw=src.naturalWidth||src.width,ih=src.naturalHeight||src.height,c=cropWin(it,p),k=it.w/(c.sw*iw);
-      pre=processImage(src,c.sx*iw,c.sy*ih,c.sw*iw,c.sh*ih,it.w,it.h,p.fx,Math.min(iw,ih)*k)}
-    const v={src:pre||src,pre:!!pre,u};cache.set(n,v);return v};
+    // cada foto é recortada e reduzida uma única vez, direto do arquivo original, no tamanho exato em pixels
+    const iw=src.naturalWidth||src.width,ih=src.naturalHeight||src.height,c=cropWin(it,p),k=it.w*S/(c.sw*iw);
+    const pre=processImage(src,c.sx*iw,c.sy*ih,c.sw*iw,c.sh*ih,it.w*S,it.h*S,p.fx,Math.min(iw,ih)*k);
+    if(u)URL.revokeObjectURL(u);
+    const v={src:pre,pre:true,u:null};cache.set(n,v);return v};
   const out=[];
   try{
     for(let k=0;k<P;k++){
-      toast(`Gerando página ${k+1} de ${P} em alta resolução…`,0);
-      const a=k*pw;ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation="source-over";
+      toast(`Gerando página ${k+1} de ${P} em qualidade máxima (${pw*S}×${ph*S})…`,0);
+      const a=k*pw;ctx.setTransform(S,0,0,S,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation="source-over";
       ctx.fillStyle=state.bg;ctx.fillRect(0,0,pw,ph);ctx.imageSmoothingQuality="high";
       for(let n=0;n<items.length;n++){const it=items[n],p=byId(it.pid);if(!p||!(it.x-pad<a+pw&&it.x+it.w+pad>a))continue;
-        const v=await get(n);drawItem(ctx,it,p,v.src,a,fl[n],1,v.pre)}
-      const blob=await new Promise(r=>page.toBlob(r,"image/jpeg",.93));
+        const v=await get(n);drawItem(ctx,it,p,v.src,a,fl[n],S,v.pre)}
+      const blob=await new Promise(r=>page.toBlob(r,"image/jpeg",1)); // qualidade máxima do JPEG
       out.push({blob,url:URL.createObjectURL(blob),name:`${fileBase()}-${String(k+1).padStart(2,"0")}.jpg`});
       for(const [n,v] of cache){const it=items[n];if(it.x+it.w+pad<=a+pw){if(v.u)URL.revokeObjectURL(v.u);cache.delete(n)}}
     }
